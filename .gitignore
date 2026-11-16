@@ -23,6 +23,7 @@ web/.next/
 web/out/
 web/next-env.d.ts
 web/.env.local
+web/*.tsbuildinfo
 
 # OS / editors
 .DS_Store
