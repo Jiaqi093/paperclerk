@@ -1,0 +1,38 @@
+# Manually triggered: refresh lock files and apply ruff formatting, then commit the result.
+# Run from the Actions tab ("Maintenance" → Run workflow) or: gh workflow run maintenance.yml
+name: Maintenance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lock-and-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv python install 3.12
+      - name: Lock Python dependencies
+        run: uv lock
+      - name: Format Python code
+        run: uv run --group dev ruff format .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Lock web dependencies
+        working-directory: web
+        run: npm install --package-lock-only
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898699+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+          else
+            git commit -m "chore: refresh lock files and apply ruff format"
+            git push
+          fi
