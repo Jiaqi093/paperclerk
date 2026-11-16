@@ -1,0 +1,16 @@
+# Copy to config.toml (git-ignored) and edit.
+
+# Folders paperclerk is allowed to read and organize. Nothing outside these is touched.
+watched_folders = ["~/Documents/paperclerk-inbox"]
+
+# Where organized files go. Must sit inside a watched folder.
+library_root = "~/Documents/paperclerk-inbox/Library"
+
+# Local database (git-ignored).
+db_path = "~/.paperclerk/paperclerk.db"
+
+[llm]
+provider = "anthropic"
+model = "claude-sonnet-5-5"
+# Extractions below this confidence go to the human review queue.
+review_threshold = 0.8

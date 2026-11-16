@@ -1,0 +1,30 @@
+# --- Private data: never commit real documents or the local database ---
+.env
+config.toml
+*.db
+*.sqlite
+*.sqlite3
+evals/data/*
+!evals/data/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Node / Next.js
+web/node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+web/.env.local
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
