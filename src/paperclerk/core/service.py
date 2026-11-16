@@ -21,7 +21,8 @@ class ScanResult:
     seen: int = 0
     new: int = 0
     updated: int = 0
-    skipped: list[str] = field(default_factory=list)  # files a parser couldn't handle yet
+    skipped: list[str] = field(default_factory=list)  # no parser implementation yet
+    failed: list[str] = field(default_factory=list)  # couldn't read or parse (logged)
 
 
 class PaperClerk:
@@ -32,32 +33,48 @@ class PaperClerk:
 
     # ---- F1: ingest -------------------------------------------------------------------------
     def scan(self) -> ScanResult:
-        """Index new or changed files in every watched folder."""
+        """Index new or changed files in every watched folder.
+
+        Files whose last parse didn't succeed are retried on every scan, so they get text once
+        their parser lands. One unreadable or malformed file never stops the scan.
+        """
         result = ScanResult()
         for root in self.settings.watched_folders:
             if not root.is_dir():
                 log.warning("watched folder missing: %s", root)
                 continue
-            known = partial(repo.get_mtime_by_path, self.conn)
-            for info in iter_changed_files(root, known):
+            up_to_date = partial(repo.is_up_to_date, self.conn)
+            for info in iter_changed_files(root, up_to_date):
                 result.seen += 1
+                try:
+                    sha256 = sha256_file(info.path)
+                except OSError:
+                    log.warning("can't read %s", info.path, exc_info=True)
+                    result.failed.append(str(info.path))
+                    continue
                 parser = parser_for(info.path)
-                text, mime = None, None
+                text, mime, status = None, None, repo.PARSE_UNSUPPORTED
                 try:
                     if parser is not None:
                         parsed = parser.parse(info.path)
-                        text, mime = parsed.text, parsed.mime_type
+                        text, mime, status = parsed.text, parsed.mime_type, repo.PARSE_OK
                 except NotImplementedError:
                     result.skipped.append(str(info.path))
+                except Exception:
+                    # Corrupt, encrypted or otherwise malformed: record it and keep going.
+                    log.warning("failed to parse %s", info.path, exc_info=True)
+                    status = repo.PARSE_FAILED
+                    result.failed.append(str(info.path))
                 _, is_new = repo.upsert_document(
                     self.conn,
-                    sha256=sha256_file(info.path),
+                    sha256=sha256,
                     path=str(info.path),
                     source="local",
                     mime_type=mime,
                     size_bytes=info.size_bytes,
                     mtime=info.mtime,
                     text=text,
+                    parse_status=status,
                 )
                 if is_new:
                     result.new += 1

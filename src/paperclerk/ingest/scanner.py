@@ -39,9 +39,9 @@ def iter_candidate_files(root: Path) -> Iterator[FileInfo]:
 
 
 def iter_changed_files(
-    root: Path, known_mtime: Callable[[str], float | None]
+    root: Path, is_up_to_date: Callable[[str, float], bool]
 ) -> Iterator[FileInfo]:
-    """Yield only files whose mtime differs from what the database already has."""
+    """Yield files the database doesn't have up to date (new, changed, or not parsed yet)."""
     for info in iter_candidate_files(root):
-        if known_mtime(str(info.path)) != info.mtime:
+        if not is_up_to_date(str(info.path), info.mtime):
             yield info

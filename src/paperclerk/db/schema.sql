@@ -1,4 +1,6 @@
--- paperclerk schema. Applied idempotently on startup.
+-- paperclerk base schema. Applied idempotently on startup.
+-- Do not add columns here: existing databases would never get them. Append a migration to
+-- MIGRATIONS in connection.py instead.
 
 PRAGMA foreign_keys = ON;
 

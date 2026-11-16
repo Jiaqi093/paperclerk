@@ -13,7 +13,13 @@ export type DocumentOut = {
   created_at: string;
 };
 
-export type ScanOut = { seen: number; new: number; updated: number; skipped: string[] };
+export type ScanOut = {
+  seen: number;
+  new: number;
+  updated: number;
+  skipped: string[];
+  failed: string[];
+};
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store", ...init });
