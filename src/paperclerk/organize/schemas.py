@@ -11,9 +11,9 @@ from pydantic import BaseModel, Field
 
 
 class OpKind(StrEnum):
-    MOVE = "move"      # move (and optionally rename) a file
+    MOVE = "move"  # move (and optionally rename) a file
     RENAME = "rename"  # rename in place
-    MKDIR = "mkdir"    # create a folder
+    MKDIR = "mkdir"  # create a folder
     # No DELETE on purpose: "disposable" files are moved to a To-Delete folder for the user.
 
 

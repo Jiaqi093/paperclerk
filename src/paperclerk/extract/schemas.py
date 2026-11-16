@@ -9,14 +9,14 @@ from pydantic import BaseModel, Field
 
 
 class DocType(StrEnum):
-    INVOICE = "invoice"            # a bill for goods/services, usually with an amount due
-    RECEIPT = "receipt"            # proof of a payment already made
+    INVOICE = "invoice"  # a bill for goods/services, usually with an amount due
+    RECEIPT = "receipt"  # proof of a payment already made
     SUBSCRIPTION = "subscription"  # signup/renewal notice for a recurring charge
-    STATEMENT = "statement"        # bank / utility / account statement
-    CONTRACT = "contract"          # agreements, leases, policies
-    IMPORTANT = "important"        # IDs, certificates, tax, legal — keep forever
-    WORK = "work"                  # employer / company documents
-    DISPOSABLE = "disposable"      # marketing, one-off notices, safe to archive
+    STATEMENT = "statement"  # bank / utility / account statement
+    CONTRACT = "contract"  # agreements, leases, policies
+    IMPORTANT = "important"  # IDs, certificates, tax, legal — keep forever
+    WORK = "work"  # employer / company documents
+    DISPOSABLE = "disposable"  # marketing, one-off notices, safe to archive
     OTHER = "other"
 
 
