@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,21 +27,26 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def is_candidate(root: Path, path: Path) -> bool:
+    """Whether a walk of `root` considers `path`: a supported type, not hidden under root."""
+    if path.suffix.lower() not in SUPPORTED_SUFFIXES or not path.is_relative_to(root):
+        return False
+    return not any(part.startswith(".") for part in path.relative_to(root).parts)
+
+
 def iter_candidate_files(root: Path) -> Iterator[FileInfo]:
-    """Yield supported, non-hidden files under root."""
+    """Yield supported, non-hidden files under root.
+
+    A file that vanishes or can't be stat'ed mid-walk (a download being renamed, a permission
+    error) is skipped rather than aborting the walk.
+    """
     for p in sorted(root.rglob("*")):
-        if not p.is_file() or p.suffix.lower() not in SUPPORTED_SUFFIXES:
+        if not is_candidate(root, p):
             continue
-        if any(part.startswith(".") for part in p.relative_to(root).parts):
+        try:
+            if not p.is_file():
+                continue
+            st = p.stat()
+        except OSError:
             continue
-        st = p.stat()
         yield FileInfo(path=p, size_bytes=st.st_size, mtime=st.st_mtime)
-
-
-def iter_changed_files(
-    root: Path, is_up_to_date: Callable[[str, float], bool]
-) -> Iterator[FileInfo]:
-    """Yield files the database doesn't have up to date (new, changed, or not parsed yet)."""
-    for info in iter_candidate_files(root):
-        if not is_up_to_date(str(info.path), info.mtime):
-            yield info

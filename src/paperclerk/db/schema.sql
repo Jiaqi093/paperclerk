@@ -1,6 +1,8 @@
 -- paperclerk base schema. Applied idempotently on startup.
--- Do not add columns here: existing databases would never get them. Append a migration to
--- MIGRATIONS in connection.py instead.
+-- Do not add or change tables, columns or indexes here: existing databases would never get
+-- them, and this file runs before migrations, so it must not reference anything a migration
+-- adds. Append a migration to MIGRATIONS in connection.py instead. The full current schema is
+-- this file plus those migrations (see test_db.py).
 
 PRAGMA foreign_keys = ON;
 
@@ -8,12 +10,12 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS documents (
     id            INTEGER PRIMARY KEY,
     sha256        TEXT    NOT NULL UNIQUE,      -- exact-duplicate detection
-    path          TEXT,                         -- current local path (NULL for email-only)
+    path          TEXT,                         -- legacy; local paths live in document_paths
     source        TEXT    NOT NULL CHECK (source IN ('local', 'gmail')),
     source_ref    TEXT,                         -- e.g. Gmail message id
     mime_type     TEXT,
     size_bytes    INTEGER,
-    mtime         REAL,                         -- for incremental rescans
+    mtime         REAL,                         -- legacy; see document_paths.mtime
     text          TEXT,                         -- extracted text
     created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))

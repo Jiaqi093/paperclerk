@@ -31,6 +31,7 @@ class ScanOut(BaseModel):
     seen: int
     new: int
     updated: int
+    removed: int
     skipped: list[str]
     failed: list[str]
 
@@ -62,7 +63,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def scan(c: PaperClerk = Depends(clerk)) -> ScanOut:
         r = c.scan()
         return ScanOut(
-            seen=r.seen, new=r.new, updated=r.updated, skipped=r.skipped, failed=r.failed
+            seen=r.seen,
+            new=r.new,
+            updated=r.updated,
+            removed=r.removed,
+            skipped=r.skipped,
+            failed=r.failed,
         )
 
     # Planned: /api/bills, /api/subscriptions (week 3)

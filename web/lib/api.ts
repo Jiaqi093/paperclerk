@@ -17,6 +17,7 @@ export type ScanOut = {
   seen: number;
   new: number;
   updated: number;
+  removed: number;
   skipped: string[];
   failed: string[];
 };
