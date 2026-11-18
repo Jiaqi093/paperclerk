@@ -14,5 +14,6 @@ def test_health_and_scan(inbox, tmp_path):
     client = TestClient(create_app(settings))
 
     assert client.get("/api/health").json()["status"] == "ok"
-    assert client.post("/api/scan").json()["new"] == 2
+    scan = client.post("/api/scan").json()
+    assert (scan["new"], scan["removed"], scan["failed"]) == (2, 0, [])
     assert len(client.get("/api/documents").json()) == 2

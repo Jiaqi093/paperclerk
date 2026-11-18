@@ -31,7 +31,9 @@ class ScanOut(BaseModel):
     seen: int
     new: int
     updated: int
+    removed: int
     skipped: list[str]
+    failed: list[str]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -60,7 +62,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/scan", response_model=ScanOut)
     def scan(c: PaperClerk = Depends(clerk)) -> ScanOut:
         r = c.scan()
-        return ScanOut(seen=r.seen, new=r.new, updated=r.updated, skipped=r.skipped)
+        return ScanOut(
+            seen=r.seen,
+            new=r.new,
+            updated=r.updated,
+            removed=r.removed,
+            skipped=r.skipped,
+            failed=r.failed,
+        )
 
     # Planned: /api/bills, /api/subscriptions (week 3)
     #          /api/plans, /api/plans/{id}/approve, /api/batches/{id}/undo (week 2–3)

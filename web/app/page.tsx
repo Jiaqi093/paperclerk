@@ -50,7 +50,11 @@ export default function DocumentsPage() {
       {lastScan && (
         <p className="mt-2 text-sm text-zinc-500">
           Last scan: {lastScan.new} new, {lastScan.updated} updated, {lastScan.skipped.length}{" "}
-          not parsed yet.
+          not parsed yet
+          {lastScan.failed.length > 0 && (
+            <span className="text-red-600">, {lastScan.failed.length} failed to parse</span>
+          )}
+          .
         </p>
       )}
       {error && (

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
-from collections.abc import Callable, Iterator
+import os
+import stat
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,21 +30,39 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def iter_candidate_files(root: Path) -> Iterator[FileInfo]:
-    """Yield supported, non-hidden files under root."""
-    for p in sorted(root.rglob("*")):
-        if not p.is_file() or p.suffix.lower() not in SUPPORTED_SUFFIXES:
-            continue
-        if any(part.startswith(".") for part in p.relative_to(root).parts):
-            continue
-        st = p.stat()
-        yield FileInfo(path=p, size_bytes=st.st_size, mtime=st.st_mtime)
+def is_candidate(root: Path, path: Path) -> bool:
+    """Whether a walk of `root` considers `path`: a supported type, not hidden under root."""
+    if path.suffix.lower() not in SUPPORTED_SUFFIXES or not path.is_relative_to(root):
+        return False
+    return not any(part.startswith(".") for part in path.relative_to(root).parts)
 
 
-def iter_changed_files(
-    root: Path, known_mtime: Callable[[str], float | None]
-) -> Iterator[FileInfo]:
-    """Yield only files whose mtime differs from what the database already has."""
-    for info in iter_candidate_files(root):
-        if known_mtime(str(info.path)) != info.mtime:
-            yield info
+def iter_candidate_files(root: Path, unreadable: list[Path] | None = None) -> Iterator[FileInfo]:
+    """Yield supported, non-hidden files under root.
+
+    A file that vanishes mid-walk (a download being renamed) is skipped. A directory or file that
+    exists but can't be read (permission denied, a cloud-sync glitch) is skipped too, and appended
+    to `unreadable` so callers don't mistake it for deleted. Hidden directories aren't entered.
+    """
+
+    def on_error(err: OSError) -> None:
+        if unreadable is not None and not isinstance(err, FileNotFoundError):
+            unreadable.append(Path(err.filename))
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=on_error):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for name in sorted(filenames):
+            p = Path(dirpath, name)
+            if not is_candidate(root, p):
+                continue
+            try:
+                st = p.stat()
+            except OSError as e:
+                # Gone, a broken symlink, or a symlink loop: nothing there to index.
+                if isinstance(e, FileNotFoundError) or e.errno in (errno.ELOOP, errno.ENOTDIR):
+                    continue
+                if unreadable is not None:
+                    unreadable.append(p)
+                continue
+            if stat.S_ISREG(st.st_mode):
+                yield FileInfo(path=p, size_bytes=st.st_size, mtime=st.st_mtime)

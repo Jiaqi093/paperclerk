@@ -29,7 +29,12 @@ def init(config: Path = ConfigOpt) -> None:
 def scan(config: Path = ConfigOpt) -> None:
     """Index new or changed files in the watched folders."""
     r = _clerk(config).scan()
-    typer.echo(f"seen={r.seen} new={r.new} updated={r.updated} skipped={len(r.skipped)}")
+    typer.echo(
+        f"seen={r.seen} new={r.new} updated={r.updated} removed={r.removed} "
+        f"skipped={len(r.skipped)} failed={len(r.failed)}"
+    )
+    for path in r.failed:
+        typer.echo(f"  failed: {path}", err=True)
 
 
 @app.command()

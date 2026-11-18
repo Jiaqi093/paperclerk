@@ -21,6 +21,24 @@ available if embeddings are needed later. Personal financial documents should st
 and moving a file doesn't create a new document. Near-duplicates (same invoice, different file)
 are handled later by matching vendor + amount + date.
 
+**Paths are a separate table (`document_paths`).** A document is immutable content: its
+sha256, text and parse outcome never change under the same id, so extractions keyed on
+`document_id` can't go stale. `document_paths` maps each on-disk path to the document it
+currently holds: copies are several paths to one document; saving next month's bill under the
+same filename repoints that path to a new document and keeps last month's as history; deleted
+files lose their path row but keep their document. `documents.path` is legacy.
+**Alternatives:** one `path` column per document (can't represent copies, so they flip-flopped
+on every scan, and editing a file either duplicated rows or rewrote the old content's row).
+
+## 3a. Schema migrations
+
+**Decision:** `schema.sql` is the frozen base; changes are appended to `MIGRATIONS` in
+`db/connection.py` and tracked with `PRAGMA user_version`, one `BEGIN IMMEDIATE` transaction
+per step with the version re-read under the lock, so the CLI and API starting together on an
+old database don't apply a step twice.
+**Why:** `CREATE TABLE IF NOT EXISTS` never alters existing databases; a migration library
+would be heavier than this project needs.
+
 ## 4. Plans are data; only the executor touches files
 
 **Decision:** the organize agent outputs a `Plan` (list of `PlannedOp`). A separate executor
