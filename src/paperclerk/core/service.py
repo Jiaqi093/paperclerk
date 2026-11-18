@@ -58,11 +58,13 @@ class PaperClerk:
         """Bring the index in line with the watched folders.
 
         - Unchanged files (same mtime and size) cost nothing, except content whose type had no
-          parser yet: that is re-parsed (without re-hashing) so it gets text once F1 lands.
+          parser yet: that is re-parsed so it gets text once F1 lands (and re-hashed before
+          the result is stored, since an unchanged mtime and size don't prove unchanged bytes).
         - New or changed files are hashed. Known content is never parsed twice; a path whose
           content changed points at the new document, and the old document keeps its text.
         - Content that failed to parse is retried only when the file changes.
-        - One unreadable or malformed file never stops the scan.
+        - One unreadable or malformed file never stops the scan. Files and folders that exist
+          but can't be read are reported in `failed` and keep their paths (not treated as deleted).
         """
         with self._db_lock:
             result = ScanResult()
@@ -72,7 +74,8 @@ class PaperClerk:
                     log.warning("watched folder missing: %s", root)
                     continue
                 present: set[str] = set()
-                for info in iter_candidate_files(root):
+                unreadable: list[Path] = []
+                for info in iter_candidate_files(root, unreadable):
                     present.add(str(info.path))
                     try:
                         self._scan_file(info, result)
@@ -82,14 +85,23 @@ class PaperClerk:
                         self.conn.rollback()
                         log.warning("database error on %s", info.path, exc_info=True)
                         result.failed.append(str(info.path))
+                for u in unreadable:
+                    log.warning("can't read %s", u)
+                    result.failed.append(str(u))
                 # Only forget paths this walk would have yielded, so a watched folder nested in a
-                # hidden folder of another watched folder doesn't lose its paths to that walk.
+                # hidden folder of another watched folder doesn't lose its paths to that walk, and
+                # never paths the walk couldn't see into: unreadable isn't deleted.
                 gone = [
                     p
                     for p in repo.paths_under(self.conn, root)
-                    if p not in present and is_candidate(root, Path(p))
+                    if p not in present
+                    and is_candidate(root, Path(p))
+                    and not any(Path(p).is_relative_to(u) for u in unreadable)
                 ]
                 result.removed += repo.delete_paths(self.conn, gone)
+            # Overlapping watched folders can report the same path twice.
+            result.skipped = list(dict.fromkeys(result.skipped))
+            result.failed = list(dict.fromkeys(result.failed))
             return result
 
     def _scan_file(self, info: FileInfo, result: ScanResult) -> None:
@@ -100,10 +112,11 @@ class PaperClerk:
             and known["mtime"] == info.mtime
             and known["size_bytes"] == info.size_bytes
         )
+        parsed: _Parsed | None = None
         if unchanged:
             if known["parse_status"] in (repo.PARSE_OK, repo.PARSE_FAILED):
                 return
-            # Never parsed (pre-migration row) or no parser last time: try again, no re-hash.
+            # Never parsed (pre-migration row) or no parser last time: try again.
             parsed = self._parse(info)
             if parsed.status == _TRANSIENT:
                 result.failed.append(path)
@@ -113,11 +126,9 @@ class PaperClerk:
                 if known["parse_status"] is None:
                     repo.set_parse_result(self.conn, known["document_id"], **_fields(parsed))
                 return
-            result.seen += 1
-            result.updated += 1
-            self._record_outcome(path, parsed, result)
-            repo.set_parse_result(self.conn, known["document_id"], **_fields(parsed))
-            return
+            # A real outcome is about to be attached to a document that copies may share. Same
+            # mtime and size doesn't prove same bytes (`cp -p`, a guessed migration mapping), so
+            # hash first; this runs once per file, when its parser lands.
 
         result.seen += 1
         try:
@@ -126,12 +137,18 @@ class PaperClerk:
             log.warning("can't read %s", info.path, exc_info=True)
             result.failed.append(path)
             return
+        if parsed is not None and sha256 == known["sha256"]:
+            result.updated += 1
+            self._record_outcome(path, parsed, result)
+            repo.set_parse_result(self.conn, known["document_id"], **_fields(parsed))
+            return
         existing = repo.get_document_by_sha(self.conn, sha256)
         if existing is not None and existing["parse_status"] in (repo.PARSE_OK, repo.PARSE_FAILED):
             # Same content as a document we already parsed (a copy, a move, a revert).
             doc_id, is_new = existing["id"], False
         else:
-            parsed = self._parse(info)
+            if parsed is None:
+                parsed = self._parse(info)
             self._record_outcome(path, parsed, result)
             if parsed.status == _TRANSIENT:
                 return

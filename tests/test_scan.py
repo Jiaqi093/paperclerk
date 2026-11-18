@@ -182,3 +182,78 @@ def test_list_documents_hides_content_no_longer_on_disk(clerk, inbox):
     (inbox / "receipt.png").unlink()
     clerk.scan()
     assert [d["path"].rsplit("/", 1)[-1] for d in clerk.list_documents()] == ["note.txt"]
+
+
+def _keep_mtime_write(path, data):
+    st = path.stat()
+    path.write_bytes(data)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+
+def test_reparse_of_unchanged_looking_file_does_not_rewrite_shared_copy(clerk, inbox, monkeypatch):
+    def not_yet(self, path):
+        raise NotImplementedError
+
+    (inbox / "copy.txt").write_bytes((inbox / "note.txt").read_bytes())
+    monkeypatch.setattr(TextParser, "parse", not_yet)
+    clerk.scan()  # note.txt and copy.txt share one unparsed document
+    # Same size, mtime preserved (`cp -p`, rsync -t): looks unchanged, but the bytes differ.
+    # (copy.txt is scanned first, so its new text must not land on the shared document.)
+    _keep_mtime_write(inbox / "copy.txt", b"Electricity bill due 24 Oct, $999.99")
+
+    monkeypatch.undo()  # the parser lands
+    clerk.scan()
+    texts = _path_texts(clerk)
+    assert texts["note.txt"] == "Electricity bill due 24 Oct, $214.37"
+    assert texts["copy.txt"] == "Electricity bill due 24 Oct, $999.99"
+    assert clerk.scan().seen == 0
+
+
+def test_unreadable_folder_is_reported_not_forgotten(clerk, inbox):
+    sub = inbox / "sub"
+    sub.mkdir()
+    (sub / "bill.txt").write_text("Water bill", encoding="utf-8")
+    clerk.scan()
+    sub.chmod(0)
+    try:
+        r = clerk.scan()
+        assert r.removed == 0
+        assert [p.rsplit("/", 1)[-1] for p in r.failed] == ["sub"]
+        assert "bill.txt" in [d["path"].rsplit("/", 1)[-1] for d in clerk.list_documents()]
+    finally:
+        sub.chmod(0o755)
+    assert _counts(clerk.scan()) == (0, 0, 0, 0)
+
+
+def test_unstatable_file_is_reported_not_forgotten(clerk, inbox, monkeypatch):
+    from pathlib import Path
+
+    clerk.scan()
+    real_stat = Path.stat
+
+    def denied(self, *args, **kwargs):
+        if self.name == "note.txt":
+            raise PermissionError(self)
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", denied)
+    r = clerk.scan()
+    assert (r.removed, [p.rsplit("/", 1)[-1] for p in r.failed]) == (0, ["note.txt"])
+    assert "note.txt" in _path_texts(clerk)
+
+
+def test_unreadable_watched_folder_keeps_all_its_paths(clerk, inbox):
+    clerk.scan()
+    inbox.chmod(0)
+    try:
+        r = clerk.scan()
+        assert (r.removed, [p.rsplit("/", 1)[-1] for p in r.failed]) == (0, ["inbox"])
+    finally:
+        inbox.chmod(0o755)
+    assert len(clerk.list_documents()) == 2
+
+
+def test_symlink_loop_is_ignored_quietly(clerk, inbox):
+    (inbox / "loop.txt").symlink_to(inbox / "loop.txt")
+    r = clerk.scan()
+    assert (r.new, r.failed) == (2, [])

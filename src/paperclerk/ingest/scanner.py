@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import os
+import stat
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,19 +37,32 @@ def is_candidate(root: Path, path: Path) -> bool:
     return not any(part.startswith(".") for part in path.relative_to(root).parts)
 
 
-def iter_candidate_files(root: Path) -> Iterator[FileInfo]:
+def iter_candidate_files(root: Path, unreadable: list[Path] | None = None) -> Iterator[FileInfo]:
     """Yield supported, non-hidden files under root.
 
-    A file that vanishes or can't be stat'ed mid-walk (a download being renamed, a permission
-    error) is skipped rather than aborting the walk.
+    A file that vanishes mid-walk (a download being renamed) is skipped. A directory or file that
+    exists but can't be read (permission denied, a cloud-sync glitch) is skipped too, and appended
+    to `unreadable` so callers don't mistake it for deleted. Hidden directories aren't entered.
     """
-    for p in sorted(root.rglob("*")):
-        if not is_candidate(root, p):
-            continue
-        try:
-            if not p.is_file():
+
+    def on_error(err: OSError) -> None:
+        if unreadable is not None and not isinstance(err, FileNotFoundError):
+            unreadable.append(Path(err.filename))
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=on_error):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for name in sorted(filenames):
+            p = Path(dirpath, name)
+            if not is_candidate(root, p):
                 continue
-            st = p.stat()
-        except OSError:
-            continue
-        yield FileInfo(path=p, size_bytes=st.st_size, mtime=st.st_mtime)
+            try:
+                st = p.stat()
+            except OSError as e:
+                # Gone, a broken symlink, or a symlink loop: nothing there to index.
+                if isinstance(e, FileNotFoundError) or e.errno in (errno.ELOOP, errno.ENOTDIR):
+                    continue
+                if unreadable is not None:
+                    unreadable.append(p)
+                continue
+            if stat.S_ISREG(st.st_mode):
+                yield FileInfo(path=p, size_bytes=st.st_size, mtime=st.st_mtime)

@@ -78,9 +78,9 @@ def set_parse_result(
 
 
 def get_path(conn: sqlite3.Connection, path: str) -> sqlite3.Row | None:
-    """What the database knows about the file at `path`: its document, mtime, size, parse state."""
+    """What the database knows about the file at `path`: its document, mtime, size, state."""
     return conn.execute(
-        "SELECT p.document_id, p.mtime, p.size_bytes, d.parse_status "
+        "SELECT p.document_id, p.mtime, p.size_bytes, d.sha256, d.parse_status "
         "FROM document_paths p JOIN documents d ON d.id = p.document_id WHERE p.path = ?",
         (path,),
     ).fetchone()
