@@ -18,8 +18,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <Link href="/" className="text-blue-600 hover:underline">
               Documents
             </Link>
-            <span className="text-zinc-400">Bills (week 3)</span>
-            <span className="text-zinc-400">Organize (week 2)</span>
+            <span className="text-zinc-400">Bills (soon)</span>
+            <span className="text-zinc-400">Organize (soon)</span>
           </nav>
         </header>
         <main className="mx-auto max-w-5xl p-6">{children}</main>

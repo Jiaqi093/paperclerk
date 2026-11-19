@@ -1,6 +1,6 @@
 """F4 — LangGraph flow: propose plan -> interrupt for human approval -> execute -> log.
 
-Planned nodes (week 2):
+Planned nodes (F4):
     load_context   gather documents + extractions in scope
     propose_plan   LLM returns a `Plan` (schemas.py), validated against safety rules
     review         langgraph `interrupt()`: the UI shows the plan, the user approves a subset
@@ -12,4 +12,4 @@ from __future__ import annotations
 
 
 def build_graph():
-    raise NotImplementedError("Organize graph lands in week 2 (F4)")
+    raise NotImplementedError("Organize graph not implemented yet (F4)")

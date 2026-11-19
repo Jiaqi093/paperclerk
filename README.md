@@ -2,7 +2,7 @@
 
 > A local-first AI agent that finds your invoices, bills and subscriptions across email and folders — and organizes them safely, with preview and undo.
 
-**Status:** skeleton (week 0). See the roadmap below.
+**Status:** early development — F1 ingest in progress. See the roadmap below.
 
 ## Why
 
@@ -43,10 +43,11 @@ Design decisions and trade-offs live in [docs/architecture.md](docs/architecture
 | F5 | Bills dashboard + Q&A with citations | ⚪ |
 | F6 | Evals: classification / extraction / dedupe accuracy | ⚪ |
 | + | MCP server | ⚪ |
+| F7 | Distillation to a small local model (stretch) | ⚪ |
 
 ## Eval results
 
-_Coming in week 2._ See [evals/README.md](evals/README.md) for methodology.
+_First numbers in week 2._ See [evals/README.md](evals/README.md) for methodology.
 
 ## Quick start
 
@@ -78,10 +79,15 @@ Tests: `uv run pytest`
 
 ## Roadmap
 
-- **Week 1** — F1 PDF/DOCX parsing, F2 classification + extraction, start labelling eval data
-- **Week 2** — F4 organize agent with undo (hand-written vs LangGraph comparison), F6 eval harness
-- **Week 3** — F3 Gmail + dedupe, F5 bills dashboard + Q&A
-- **Week 4** — MCP server, tune on eval results, demo video
+Full plan with per-stage checklists: [docs/roadmap.md](docs/roadmap.md).
+
+- **Week 1** — finish F1 (PDF/DOCX, per-page text), F2 basics (LLM client, call log, extraction), F6 v1 (start labelling eval data, synthetic set)
+- **Week 2** — finish F2 (review UI, background jobs, model routing, caching), first eval numbers
+- **Week 3** — F4 organize agent with undo (hand-written vs LangGraph), safety and injection tests
+- **Week 4** — F3 Gmail sync, cross-source dedupe, prompt-injection defense
+- **Week 5** — F5 hybrid search (FTS5 + vectors), Q&A with citations, bills dashboard
+- **Week 6** — MCP server, tune on eval results, Docker, hosted demo on synthetic data, demo video
+- **Later** — F7 distillation (stretch)
 
 ## License
 

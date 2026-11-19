@@ -197,14 +197,14 @@ class PaperClerk:
 
     # ---- F2: classify / extract ---------------------------------------------------------------
     def classify_pending(self) -> int:
-        raise NotImplementedError("week 1 (F2)")
+        raise NotImplementedError("F2: not implemented yet")
 
     # ---- F4: organize -------------------------------------------------------------------------
     def propose_plan(self) -> Any:
-        raise NotImplementedError("week 2 (F4)")
+        raise NotImplementedError("F4: not implemented yet")
 
     def undo(self, batch_id: str) -> int:
-        raise NotImplementedError("week 2 (F4)")
+        raise NotImplementedError("F4: not implemented yet")
 
 
 def _fields(parsed: _Parsed) -> dict[str, Any]:

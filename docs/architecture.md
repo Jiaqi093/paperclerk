@@ -12,7 +12,7 @@ and the MCP server only translate inputs/outputs.
 
 **Alternatives:** Postgres, a hosted vector DB.
 **Why:** zero setup for a personal tool, single file, FTS5 for full-text search, `sqlite-vec`
-available if embeddings are needed later. Personal financial documents should stay on the device.
+for embeddings (see §9). Personal financial documents should stay on the device.
 
 ## 3. Content hash as document identity
 
@@ -53,7 +53,7 @@ extraction (F2) are plain functions.
 **Why:** F4 needs pause-for-human-approval and resumable state (LangGraph `interrupt` +
 SQLite checkpointer). F1/F2 are single-shot pipelines; a framework would add indirection
 without benefit. Nodes call the Anthropic SDK directly rather than LangChain model wrappers.
-**To do (week 2):** implement F4 once by hand and once with LangGraph; record the comparison here.
+**To do (F4):** implement F4 once by hand and once with LangGraph; record the comparison here.
 
 ## 6. Thin LLM interface
 
@@ -65,3 +65,29 @@ touches one package, and evals can compare providers on the same interface.
 ## 7. Package named `mcp_server`, not `mcp`
 
 **Why:** avoids shadowing the official `mcp` SDK on import.
+
+## 8. Evals before tuning
+
+**Decision:** the F6 harness starts alongside F2, not after it. Planned: scoring runs in CI on
+cached model outputs; runs that call the API are manual. Every run records cost and latency as well
+as accuracy.
+**Why:** prompt, model-routing and caching choices in F2 should be made from numbers. Cached
+outputs keep CI free and deterministic.
+
+## 9. Local embeddings, hybrid search
+
+**Decision:** F5 `search_documents` combines FTS5 keyword search with `sqlite-vec` vector
+search (reciprocal rank fusion) over per-page chunks, with a small local embedding model
+(e.g. bge-small via ONNX).
+**Alternatives:** an embedding API (better quality, but sends document text to another
+provider); keyword search only (misses paraphrases like "power bill" vs "electricity").
+**Why:** keeps documents on the device; bills are short and keyword-heavy, so a small model
+plus FTS5 should be enough. F6 compares hybrid against keyword-only.
+
+## 10. Untrusted document content
+
+**Decision:** document and email text is treated as untrusted input. It is passed to the model
+as marked data, never as instructions, and model output that touches the filesystem (paths,
+filenames) is validated by the executor.
+**Why:** anyone can email you a "bill". Prompt injection is the main attack surface; the
+executor's rules in code (§4) are the layer that can't be talked out of.

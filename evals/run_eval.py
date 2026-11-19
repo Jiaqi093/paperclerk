@@ -1,4 +1,4 @@
-"""Score the F2 pipeline against hand-labelled documents. Implemented in week 2 (F6)."""
+"""Score the F2 pipeline against hand-labelled documents. Not implemented yet (F6)."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def main() -> None:
     args = ap.parse_args()
     labels = load_labels(args.labels)
     print(f"loaded {len(labels)} labelled documents")
-    # TODO(week 2): run classify() on each file, compare FIELDS, print a table, append results.md
+    # TODO(F6): run classify() on each file, compare FIELDS, print a table, append results.md
     raise SystemExit("scoring not implemented yet")
 
 
