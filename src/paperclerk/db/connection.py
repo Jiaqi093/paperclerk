@@ -51,6 +51,9 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     # 4: why the last parse failed, in words a user can act on ("password protected"), so
     #    the UI can show it. NULL unless parse_status is 'failed'.
     ("ALTER TABLE documents ADD COLUMN parse_error TEXT",),
+    # 5: version of the parser that produced the outcome (Parser.version; NULL = 0, i.e.
+    #    before versions existed), so bumping a parser's version re-parses its file type.
+    ("ALTER TABLE documents ADD COLUMN parser_version INTEGER",),
 )
 
 

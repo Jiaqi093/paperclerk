@@ -31,6 +31,10 @@ class ParsedDocument:
 
 class Parser(Protocol):
     suffixes: frozenset[str]
+    # Bump when a change could alter what this parser returns for some file (a bug fix, new
+    # content read): the next scan re-parses every file of this type. Documents whose text
+    # comes out the same aren't touched.
+    version: int
 
     def parse(self, data: bytes, path: Path) -> ParsedDocument:
         """Parse a file's content. `data` is the whole file, read once by the caller so the

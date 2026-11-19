@@ -35,6 +35,7 @@ class PdfParser:
     """
 
     suffixes = frozenset({".pdf"})
+    version = 1
 
     def parse(self, data: bytes, path: Path) -> ParsedDocument:
         with _pdfium_lock:

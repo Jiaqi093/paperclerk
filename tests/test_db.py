@@ -227,3 +227,21 @@ def test_parse_error_follows_parse_status():
     repo.upsert_document(conn, sha256="x", source="local", parse_status="ok", pages=[Page("a")])
     row = conn.execute("SELECT parse_status, parse_error FROM documents").fetchone()
     assert tuple(row) == ("ok", None)
+
+
+def test_no_cloud_downloads_sets_and_restores_the_thread_policy():
+    import ctypes
+    import sys
+
+    import pytest
+
+    from paperclerk.ingest import scanner
+
+    if sys.platform != "darwin":
+        pytest.skip("macOS only")
+    libc = ctypes.CDLL(None)
+    policy = (scanner._IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, scanner._IOPOL_SCOPE_THREAD)
+    before = libc.getiopolicy_np(*policy)
+    with scanner.no_cloud_downloads():
+        assert libc.getiopolicy_np(*policy) == scanner._IOPOL_MATERIALIZE_DATALESS_FILES_OFF
+    assert libc.getiopolicy_np(*policy) == before

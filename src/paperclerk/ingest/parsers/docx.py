@@ -49,6 +49,7 @@ class DocxParser:
     """
 
     suffixes = frozenset({".docx"})
+    version = 1
 
     def parse(self, data: bytes, path: Path) -> ParsedDocument:
         if data.startswith(OLE_MAGIC):

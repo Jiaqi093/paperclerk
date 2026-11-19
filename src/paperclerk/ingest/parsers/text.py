@@ -10,6 +10,7 @@ from paperclerk.ingest.parsers.base import Page, ParsedDocument, ParseError
 
 class TextParser:
     suffixes = frozenset({".txt", ".md", ".csv"})
+    version = 1
 
     def parse(self, data: bytes, path: Path) -> ParsedDocument:
         return ParsedDocument(mime_type="text/plain", pages=(Page(decode_text(data)),))

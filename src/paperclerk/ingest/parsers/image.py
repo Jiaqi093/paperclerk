@@ -10,6 +10,7 @@ class ImageParser:
     """Images carry no text layer: mark them for the vision model in F2."""
 
     suffixes = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+    version = 1
 
     def parse(self, data: bytes, path: Path) -> ParsedDocument:
         mime = mimetypes.guess_type(path.name)[0] or "image/png"

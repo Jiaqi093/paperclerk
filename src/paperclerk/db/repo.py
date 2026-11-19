@@ -39,12 +39,14 @@ def upsert_document(
     source_ref: str | None = None,
     parse_status: str | None = None,
     parse_error: str | None = None,
+    parser_version: int | None = None,
 ) -> tuple[int, bool]:
     """Insert a document for this content, or fill in fields on the existing one.
 
     Never changes an existing document's sha256, source or source_ref; None arguments leave
     stored values alone (`pages=None` keeps the stored pages, a list replaces them;
-    `parse_error` is replaced whenever `parse_status` is given, since it describes it). The row
+    `parse_error` and `parser_version` are replaced whenever `parse_status` is given, since
+    they describe it). The row
     and its pages are written in one transaction. Returns (document_id, is_new).
     """
     with conn:
@@ -55,16 +57,35 @@ def upsert_document(
                 "UPDATE documents SET size_bytes = COALESCE(?, size_bytes), "
                 "mime_type = COALESCE(?, mime_type), "
                 "parse_error = CASE WHEN ? IS NULL THEN parse_error ELSE ? END, "
+                "parser_version = CASE WHEN ? IS NULL THEN parser_version ELSE ? END, "
                 "parse_status = COALESCE(?, parse_status), updated_at = datetime('now') "
                 "WHERE id = ?",
-                (size_bytes, mime_type, parse_status, parse_error, parse_status, doc_id),
+                (
+                    size_bytes,
+                    mime_type,
+                    parse_status,
+                    parse_error,
+                    parse_status,
+                    parser_version,
+                    parse_status,
+                    doc_id,
+                ),
             )
         else:
             cur = conn.execute(
                 "INSERT INTO documents "
-                "(sha256, source, source_ref, mime_type, size_bytes, parse_status, parse_error) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (sha256, source, source_ref, mime_type, size_bytes, parse_status, parse_error),
+                "(sha256, source, source_ref, mime_type, size_bytes, parse_status, parse_error, "
+                "parser_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sha256,
+                    source,
+                    source_ref,
+                    mime_type,
+                    size_bytes,
+                    parse_status,
+                    parse_error,
+                    parser_version,
+                ),
             )
             doc_id, is_new = int(cur.lastrowid), True
         if pages is not None:
@@ -80,15 +101,22 @@ def set_parse_result(
     mime_type: str | None,
     parse_status: str,
     parse_error: str | None = None,
+    parser_version: int | None = None,
 ) -> None:
     """Record a new parse outcome; the document's pages become exactly `pages` (None: none)."""
     with conn:
         conn.execute(
             "UPDATE documents SET mime_type = COALESCE(?, mime_type), parse_status = ?, "
-            "parse_error = ?, updated_at = datetime('now') WHERE id = ?",
-            (mime_type, parse_status, parse_error, document_id),
+            "parse_error = ?, parser_version = ?, updated_at = datetime('now') WHERE id = ?",
+            (mime_type, parse_status, parse_error, parser_version, document_id),
         )
         _replace_pages(conn, document_id, pages or [])
+
+
+def set_parser_version(conn: sqlite3.Connection, document_id: int, version: int) -> None:
+    """Record that the current parser version gives this document the outcome it has."""
+    with conn:
+        conn.execute("UPDATE documents SET parser_version = ? WHERE id = ?", (version, document_id))
 
 
 def _replace_pages(conn: sqlite3.Connection, document_id: int, pages: Sequence[Page]) -> None:
@@ -118,7 +146,8 @@ def document_text(conn: sqlite3.Connection, document_id: int) -> str | None:
 def get_path(conn: sqlite3.Connection, path: str) -> sqlite3.Row | None:
     """What the database knows about the file at `path`: its document, mtime, size, state."""
     return conn.execute(
-        "SELECT p.document_id, p.mtime, p.size_bytes, d.sha256, d.parse_status "
+        "SELECT p.document_id, p.mtime, p.size_bytes, d.sha256, d.parse_status, "
+        "d.parse_error, d.parser_version, d.mime_type "
         "FROM document_paths p JOIN documents d ON d.id = p.document_id WHERE p.path = ?",
         (path,),
     ).fetchone()

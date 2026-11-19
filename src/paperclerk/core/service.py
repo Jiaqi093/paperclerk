@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import logging
 import sqlite3
@@ -12,11 +13,12 @@ from typing import Any
 
 from paperclerk.config import Settings
 from paperclerk.db import connect, init_db, repo
-from paperclerk.ingest.parsers import Page, ParseError, parser_for
+from paperclerk.ingest.parsers import Page, ParseError, Parser, parser_for
 from paperclerk.ingest.scanner import (
     FileInfo,
     is_candidate,
     iter_candidate_files,
+    no_cloud_downloads,
     sha256_file,
 )
 
@@ -31,11 +33,26 @@ class ScanResult:
     removed: int = 0  # paths no longer on disk (their documents are kept)
     skipped: list[str] = field(default_factory=list)  # no parser implementation yet
     failed: list[str] = field(default_factory=list)  # couldn't read or parse (logged)
+    # Only in the cloud (not downloaded): left alone so the scan doesn't download them. Known
+    # ones keep their documents; new ones are indexed once downloaded.
+    cloud_only: list[str] = field(default_factory=list)
 
 
 # Files larger than this are hashed (so duplicates are still found) but not parsed: they
 # would be read into memory whole, and bills, invoices and receipts are never this big.
 MAX_PARSE_BYTES = 100 * 1024 * 1024
+_TOO_LARGE_PREFIX = "too large to read"
+TOO_LARGE = f"{_TOO_LARGE_PREFIX} (over {MAX_PARSE_BYTES // (1024 * 1024)} MB)"
+
+
+def _outdated(known: sqlite3.Row, parser: Parser | None, info: FileInfo) -> bool:
+    """Whether an unchanged, already parsed file should be parsed again."""
+    if parser is None:
+        return False
+    error = known["parse_error"] or ""
+    if error.startswith(_TOO_LARGE_PREFIX) and info.size_bytes <= MAX_PARSE_BYTES:
+        return True  # the size limit was raised since
+    return (known["parser_version"] or 0) < parser.version
 
 
 class _ChangedWhileReading(OSError):
@@ -83,6 +100,7 @@ class _Parsed:
     mime_type: str | None
     status: str
     error: str | None = None  # why parsing failed, for the user (status 'failed' only)
+    version: int | None = None  # Parser.version that produced this outcome
 
 
 class PaperClerk:
@@ -98,16 +116,20 @@ class PaperClerk:
     def scan(self) -> ScanResult:
         """Bring the index in line with the watched folders.
 
-        - Unchanged files (same mtime and size) cost nothing, except content whose type had no
-          parser yet: that is re-parsed so it gets pages once F1 lands (and re-hashed before
-          the result is stored, since an unchanged mtime and size don't prove unchanged bytes).
+        - Unchanged files (same mtime and size) cost nothing, except when their parser is newer
+          than the one that parsed them (Parser.version), they had no parser, or they were too
+          large under a smaller limit. Those are re-parsed (and re-hashed before the result is
+          stored, since an unchanged mtime and size don't prove unchanged bytes); a document
+          whose pages come out the same only has its version updated.
+        - Files only in the cloud (iCloud, Dropbox, ...) aren't read, so a scan never downloads
+          them; they're reported in `cloud_only` and keep their paths.
         - New or changed files are hashed. Known content is never parsed twice; a path whose
           content changed points at the new document, and the old document keeps its pages.
         - Content that failed to parse is retried only when the file changes.
         - One unreadable or malformed file never stops the scan. Files and folders that exist
           but can't be read are reported in `failed` and keep their paths (not treated as deleted).
         """
-        with self._db_lock:
+        with self._db_lock, no_cloud_downloads():
             result = ScanResult()
             for root in self.settings.watched_folders:
                 if not root.is_dir():
@@ -143,19 +165,25 @@ class PaperClerk:
             # Overlapping watched folders can report the same path twice.
             result.skipped = list(dict.fromkeys(result.skipped))
             result.failed = list(dict.fromkeys(result.failed))
+            result.cloud_only = list(dict.fromkeys(result.cloud_only))
             return result
 
     def _scan_file(self, info: FileInfo, result: ScanResult) -> None:
         path = str(info.path)
+        if info.cloud_only:
+            result.cloud_only.append(path)
+            return
         known = repo.get_path(self.conn, path)
         unchanged = (
             known is not None
             and known["mtime"] == info.mtime
             and known["size_bytes"] == info.size_bytes
         )
+        parser = parser_for(info.path)
         if unchanged and known["parse_status"] in (repo.PARSE_OK, repo.PARSE_FAILED):
-            return
-        if unchanged and parser_for(info.path) is None:
+            if not _outdated(known, parser, info):
+                return
+        elif unchanged and parser is None:
             result.skipped.append(path)
             return
         if not unchanged:
@@ -165,19 +193,28 @@ class PaperClerk:
         # rewritten mid-scan can't pair one content's hash with another content's text.
         try:
             content = _read(info)
-        except OSError:
+        except OSError as e:
+            if e.errno == errno.EDEADLK:
+                # Evicted to the cloud after the walk saw it: the read was refused rather than
+                # downloading it (no_cloud_downloads).
+                result.cloud_only.append(path)
+                return
             log.warning("can't read %s", info.path, exc_info=True)
             result.failed.append(path)
             return
 
         parsed: _Parsed | None = None
         if unchanged:
-            # Never parsed (pre-migration row) or no parser last time: try again.
+            # No parser last time, a newer parser now, or a raised size limit: try again.
             parsed = self._parse(info, content.data)
             if parsed.status == repo.PARSE_UNSUPPORTED:
                 result.skipped.append(path)
                 if known["parse_status"] is None:
                     repo.set_parse_result(self.conn, known["document_id"], **_fields(parsed))
+                elif parser is not None:
+                    # A newer version that isn't implemented yet: keep the outcome the old
+                    # one gave, and don't re-read the file on every scan.
+                    repo.set_parser_version(self.conn, known["document_id"], parser.version)
                 return
             # A real outcome is about to be attached to a document that copies may share. Same
             # mtime and size doesn't prove same bytes (`cp -p`, a guessed migration mapping), so
@@ -186,9 +223,15 @@ class PaperClerk:
         if unchanged:
             result.seen += 1
         if parsed is not None and content.sha256 == known["sha256"]:
-            result.updated += 1
             self._record_outcome(path, parsed, result)
-            repo.set_parse_result(self.conn, known["document_id"], **_fields(parsed))
+            doc_id = known["document_id"]
+            if self._same_outcome(known, parsed):
+                repo.set_parser_version(self.conn, doc_id, parsed.version)
+            else:
+                # TODO(F2): the text changed under existing extractions: mark them stale (never
+                # overwrite human_verified fields) so they're re-extracted or reviewed.
+                result.updated += 1
+                repo.set_parse_result(self.conn, doc_id, **_fields(parsed))
             return
         existing = repo.get_document_by_sha(self.conn, content.sha256)
         if existing is not None and existing["parse_status"] in (repo.PARSE_OK, repo.PARSE_FAILED):
@@ -211,14 +254,21 @@ class PaperClerk:
         else:
             result.updated += 1
 
+    def _same_outcome(self, known: sqlite3.Row, parsed: _Parsed) -> bool:
+        if (parsed.status, parsed.error) != (known["parse_status"], known["parse_error"]):
+            return False
+        if parsed.mime_type is not None and parsed.mime_type != known["mime_type"]:
+            return False
+        return repo.get_pages(self.conn, known["document_id"]) == list(_fields(parsed)["pages"])
+
     @staticmethod
     def _parse(info: FileInfo, data: bytes | None) -> _Parsed:
         parser = parser_for(info.path)
         if parser is None:
             return _Parsed(None, None, repo.PARSE_UNSUPPORTED)
+        v = parser.version
         if data is None:
-            limit = MAX_PARSE_BYTES // (1024 * 1024)
-            return _Parsed(None, None, repo.PARSE_FAILED, f"too large to read (over {limit} MB)")
+            return _Parsed(None, None, repo.PARSE_FAILED, TOO_LARGE, v)
         try:
             parsed = parser.parse(data, info.path)
         except NotImplementedError:
@@ -226,13 +276,13 @@ class PaperClerk:
         except ParseError as e:
             # A known problem with the content (e.g. password protected).
             log.warning("can't parse %s: %s", info.path, e)
-            return _Parsed(None, None, repo.PARSE_FAILED, str(e))
+            return _Parsed(None, None, repo.PARSE_FAILED, str(e), v)
         except Exception:
             # Corrupt or otherwise malformed: record it and keep going. Parsers get bytes, not
             # the file, so even an OSError here is about the content.
             log.warning("failed to parse %s", info.path, exc_info=True)
-            return _Parsed(None, None, repo.PARSE_FAILED, "damaged or unreadable file")
-        return _Parsed(parsed.pages, parsed.mime_type, repo.PARSE_OK)
+            return _Parsed(None, None, repo.PARSE_FAILED, "damaged or unreadable file", v)
+        return _Parsed(parsed.pages, parsed.mime_type, repo.PARSE_OK, None, v)
 
     @staticmethod
     def _record_outcome(path: str, parsed: _Parsed, result: ScanResult) -> None:
@@ -265,4 +315,5 @@ def _fields(parsed: _Parsed) -> dict[str, Any]:
         "mime_type": parsed.mime_type,
         "parse_status": parsed.status,
         "parse_error": parsed.error,
+        "parser_version": parsed.version,
     }

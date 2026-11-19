@@ -38,10 +38,13 @@ schema migrations.
 - [x] Store per-page text and `needs_vision` _(new — parsers return them, the database drops
       them)_: a `document_pages (document_id, page_no, text)` table and a `needs_vision` column.
       F2 needs the flag to route scans to vision; F5 needs pages for chunking and page citations.
-- [ ] `parser_version` on documents, so content marked `failed` is retried after a parser fix
-- [x] Hash and parse the same bytes (read once; a file written while being read is retried);
-      files over 100 MB are hashed but not parsed; text files in any encoding (GBK, Big5,
-      UTF-16) via charset-normalizer
+- [x] `parser_version`: each parser has a `version`; bumping it re-parses every file of that
+      type once. Same pages → only the version is updated; changed pages are replaced (F2:
+      mark extractions stale then, never overwrite `human_verified`). **Bump the version
+      whenever a parser change could alter its output.**
+- [x] Cloud-only files (iCloud "Optimize Mac Storage", Dropbox, OneDrive: macOS
+      `SF_DATALESS`) are never read, so scans don't download them; reported in
+      `cloud_only`, known ones keep their paths. Not yet tested on a real sync folder.
 - [ ] Small fixes from the PR #2 review: `paths_under` as a range query instead of a full table
       scan; show `removed` in the web UI; clearer label than "failed to parse"; guard migrate's
       `ROLLBACK` with `in_transaction`; don't re-report empty unreadable folders on every scan

@@ -395,3 +395,178 @@ def test_huge_file_is_hashed_but_not_parsed(clerk, inbox, monkeypatch):
     docs = {r[0].rsplit("/", 1)[-1]: (r[1], r[2]) for r in rows}
     assert docs["note.txt"] == docs["copy.txt"]  # still deduplicated by hash
     assert docs["note.txt"][1].startswith("too large to read")
+
+
+def _version(clerk, name):
+    return clerk.conn.execute(
+        "SELECT d.parser_version FROM document_paths p JOIN documents d ON d.id = p.document_id "
+        "WHERE p.path LIKE ?",
+        (f"%/{name}",),
+    ).fetchone()[0]
+
+
+def test_new_parser_version_retries_failures(clerk, inbox, monkeypatch):
+    real_parse = TextParser.parse
+
+    def buggy(self, data, path):
+        raise ValueError("parser bug")
+
+    monkeypatch.setattr(TextParser, "parse", buggy)
+    clerk.scan()
+    assert _path_texts(clerk)["note.txt"] is None  # failed
+
+    monkeypatch.setattr(TextParser, "parse", real_parse)  # the bug is fixed...
+    assert clerk.scan().seen == 0  # ...but the file didn't change: not retried
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)  # ...and released
+    r = clerk.scan()
+    assert (r.seen, r.updated, r.failed) == (1, 1, [])
+    assert _path_texts(clerk)["note.txt"] == "Electricity bill due 24 Oct, $214.37"
+    assert clerk.scan().seen == 0  # once per version
+
+
+def test_new_parser_version_with_the_same_text_only_updates_the_version(clerk, monkeypatch):
+    clerk.scan()
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    r = clerk.scan()
+    assert (r.seen, r.updated) == (1, 0)  # parsed again, nothing changed
+    assert _version(clerk, "note.txt") == TextParser.version
+    assert _version(clerk, "receipt.png") == 1  # other parsers' files untouched
+    assert clerk.scan().seen == 0
+
+
+def test_new_parser_version_that_reads_more_replaces_the_text(clerk, monkeypatch):
+    from paperclerk.ingest.parsers import Page, ParsedDocument
+
+    clerk.scan()
+    better = ParsedDocument("text/plain", (Page("Electricity bill due 24 Oct, $214.37 + GST"),))
+    monkeypatch.setattr(TextParser, "parse", lambda self, data, path: better)
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    r = clerk.scan()
+    assert (r.seen, r.updated) == (1, 1)
+    assert _path_texts(clerk)["note.txt"].endswith("+ GST")
+
+
+def test_documents_from_before_versions_are_parsed_once_more(clerk):
+    clerk.scan()
+    clerk.conn.execute("UPDATE documents SET parser_version = NULL")
+    clerk.conn.commit()
+    assert (clerk.scan().seen, clerk.scan().seen) == (2, 0)
+
+
+def test_raised_size_limit_retries_files_that_were_too_large(clerk, inbox, monkeypatch):
+    from paperclerk.core import service
+
+    monkeypatch.setattr(service, "MAX_PARSE_BYTES", 10)
+    clerk.scan()
+    assert _path_texts(clerk)["note.txt"] is None
+    assert clerk.scan().seen == 0  # still too large: left alone
+    monkeypatch.undo()  # the limit goes back up
+    clerk.scan()
+    assert _path_texts(clerk)["note.txt"] == "Electricity bill due 24 Oct, $214.37"
+
+
+def _cloud_only(monkeypatch, *names):
+    """Make the walk see `names` as iCloud/Dropbox placeholders, and fail any read of them."""
+    from pathlib import Path
+
+    from paperclerk.ingest.scanner import SF_DATALESS
+
+    real_stat, real_open = Path.stat, Path.open
+
+    class Placeholder:
+        def __init__(self, st):
+            self._st = st
+
+        def __getattr__(self, name):
+            return getattr(self._st, name)
+
+        st_flags = SF_DATALESS
+
+    def stat(self, *args, **kwargs):
+        st = real_stat(self, *args, **kwargs)
+        return Placeholder(st) if self.name in names else st
+
+    def no_download(self, mode="r", *args, **kwargs):
+        assert self.name not in names, f"{self.name} was read: that downloads it"
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    monkeypatch.setattr(Path, "open", no_download)
+
+
+def test_cloud_only_files_are_not_downloaded_or_forgotten(clerk, inbox, monkeypatch):
+    (inbox / "march.txt").write_text("Water bill $40", encoding="utf-8")
+    clerk.scan()
+    (inbox / "april.txt").write_text("Water bill $42", encoding="utf-8")
+    _cloud_only(monkeypatch, "march.txt", "april.txt")  # macOS evicts both to iCloud
+    r = clerk.scan()
+    assert sorted(p.rsplit("/", 1)[-1] for p in r.cloud_only) == ["april.txt", "march.txt"]
+    assert (r.removed, r.failed) == (0, [])
+    texts = _path_texts(clerk)
+    assert texts["march.txt"] == "Water bill $40"  # known: kept as it was
+    assert "april.txt" not in texts  # new: waits until downloaded
+
+    monkeypatch.undo()  # the user opens them: downloaded
+    clerk.scan()
+    assert _path_texts(clerk)["april.txt"] == "Water bill $42"
+
+
+def test_cloud_only_file_is_not_downloaded_for_a_new_parser_version(clerk, monkeypatch):
+    clerk.scan()
+    _cloud_only(monkeypatch, "note.txt")
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    assert clerk.scan().seen == 0  # the assert in no_download would fail the scan otherwise
+
+
+def test_read_refused_for_a_file_evicted_after_the_walk_counts_as_cloud_only(clerk, monkeypatch):
+    import errno
+    from pathlib import Path
+
+    real_open = Path.open
+
+    def evicted(self, mode="r", *args, **kwargs):
+        if self.name == "note.txt" and mode == "rb":
+            raise OSError(errno.EDEADLK, "Resource deadlock avoided", str(self))
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", evicted)
+    r = clerk.scan()
+    assert ([p.rsplit("/", 1)[-1] for p in r.cloud_only], r.failed) == (["note.txt"], [])
+
+
+def test_unimplemented_new_version_keeps_the_old_outcome_and_settles(clerk, monkeypatch):
+    clerk.scan()
+
+    def not_yet(self, data, path):
+        raise NotImplementedError
+
+    monkeypatch.setattr(TextParser, "parse", not_yet)
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    clerk.scan()
+    assert _path_texts(clerk)["note.txt"] == "Electricity bill due 24 Oct, $214.37"
+    assert clerk.scan().seen == 0 and not clerk.scan().skipped
+
+
+def test_new_version_that_only_changes_the_mime_type_is_stored(clerk, monkeypatch):
+    from paperclerk.ingest.parsers import Page, ParsedDocument
+
+    clerk.scan()
+    same_text = ParsedDocument("text/csv", (Page("Electricity bill due 24 Oct, $214.37"),))
+    monkeypatch.setattr(TextParser, "parse", lambda self, data, path: same_text)
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    clerk.scan()
+    mime = clerk.conn.execute(
+        "SELECT d.mime_type FROM document_paths p JOIN documents d ON d.id = p.document_id "
+        "WHERE p.path LIKE '%note.txt'"
+    ).fetchone()[0]
+    assert mime == "text/csv"
+
+
+def test_version_bump_with_copies_parses_the_shared_content_once(clerk, inbox, monkeypatch):
+    for name in ("a.txt", "b.txt"):
+        (inbox / name).write_bytes((inbox / "note.txt").read_bytes())
+    clerk.scan()
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    r = clerk.scan()
+    assert (r.seen, r.updated) == (1, 0)  # a.txt re-parses; b.txt and note.txt see v2
+    assert clerk.scan().seen == 0

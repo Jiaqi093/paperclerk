@@ -36,6 +36,7 @@ class ScanOut(BaseModel):
     removed: int
     skipped: list[str]
     failed: list[str]
+    cloud_only: list[str]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -71,6 +72,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             removed=r.removed,
             skipped=r.skipped,
             failed=r.failed,
+            cloud_only=r.cloud_only,
         )
 
     # Planned: /api/bills, /api/subscriptions (F5)

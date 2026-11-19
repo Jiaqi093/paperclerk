@@ -22,6 +22,7 @@ export type ScanOut = {
   removed: number;
   skipped: string[];
   failed: string[];
+  cloud_only: string[];
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
