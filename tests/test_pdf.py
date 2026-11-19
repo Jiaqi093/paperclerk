@@ -17,6 +17,10 @@ STAMP = "Scanned by CamScanner 2026-10-24 10:31"  # > MIN_CHARS_PER_PAGE on its 
 W, H = A4
 
 
+def _parse(path: Path):
+    return PdfParser().parse(path.read_bytes(), path)
+
+
 def _photo(tmp_path: Path) -> str:
     p = tmp_path / "photo.png"
     Image.new("RGB", (60, 90), "white").save(p)
@@ -38,21 +42,21 @@ def _pdf(path: Path, pages: list[dict], **kwargs) -> Path:
 
 def test_text_pdf_gives_text_per_page(tmp_path):
     pdf = _pdf(tmp_path / "bill.pdf", [{"lines": [BILL]}, {"lines": ["Usage: 320 kWh peak"] * 2}])
-    doc = PdfParser().parse(pdf)
+    doc = _parse(pdf)
     assert doc.mime_type == "application/pdf"
     assert doc.pages == (Page(BILL), Page("Usage: 320 kWh peak\nUsage: 320 kWh peak"))
     assert not doc.needs_vision
 
 
 def test_blank_page_is_flagged_for_vision(tmp_path):
-    doc = PdfParser().parse(_pdf(tmp_path / "scan.pdf", [{}]))
+    doc = _parse(_pdf(tmp_path / "scan.pdf", [{}]))
     assert doc.pages == (Page("", needs_vision=True),)
 
 
 def test_photo_with_a_stamped_line_is_a_scan_but_only_that_page(tmp_path):
     photo = _photo(tmp_path)
     pdf = _pdf(tmp_path / "mixed.pdf", [{"lines": [BILL]}, {"image": photo, "lines": [STAMP]}])
-    doc = PdfParser().parse(pdf)
+    doc = _parse(pdf)
     assert [p.needs_vision for p in doc.pages] == [False, True]
     assert doc.pages[1].text == STAMP  # the text layer is still kept
 
@@ -60,20 +64,20 @@ def test_photo_with_a_stamped_line_is_a_scan_but_only_that_page(tmp_path):
 def test_full_text_page_over_a_background_image_is_not_a_scan(tmp_path):
     photo = _photo(tmp_path)
     pdf = _pdf(tmp_path / "letterhead.pdf", [{"image": photo, "lines": [BILL] * 5}])
-    assert not PdfParser().parse(pdf).needs_vision
+    assert not _parse(pdf).needs_vision
 
 
 def test_password_protected_pdf_says_so(tmp_path):
     pdf = _pdf(tmp_path / "statement.pdf", [{"lines": [BILL]}], encrypt="secret")
     with pytest.raises(ParseError, match="password protected"):
-        PdfParser().parse(pdf)
+        _parse(pdf)
 
 
 def test_damaged_pdf_raises_parse_error(tmp_path):
     bad = tmp_path / "bad.pdf"
     bad.write_bytes(b"%PDF-1.4 this is not really a pdf")
     with pytest.raises(ParseError, match="damaged"):
-        PdfParser().parse(bad)
+        _parse(bad)
 
 
 def test_scan_indexes_pdfs_and_reports_why_one_failed(clerk, inbox):
@@ -115,13 +119,13 @@ def _form_pdf(path: Path, photo: str, form_size: tuple[float, float], scale: flo
 def test_picture_inside_a_scaled_up_form_counts_at_its_page_size(tmp_path):
     # Drawn 100x100 in the form, scaled to fill the page.
     pdf = _form_pdf(tmp_path / "f.pdf", _photo(tmp_path), (W / 6, H / 6), 6)
-    assert PdfParser().parse(pdf).needs_vision
+    assert _parse(pdf).needs_vision
 
 
 def test_picture_inside_a_scaled_down_form_is_small(tmp_path):
     # Full page size in the form, shrunk to 10% on the page: a thumbnail, not a scan.
     pdf = _form_pdf(tmp_path / "f.pdf", _photo(tmp_path), (W, H), 0.1)
-    assert not PdfParser().parse(pdf).needs_vision
+    assert not _parse(pdf).needs_vision
 
 
 def test_one_unreadable_page_keeps_the_others(tmp_path, monkeypatch):
@@ -140,18 +144,8 @@ def test_one_unreadable_page_keeps_the_others(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pdf_mod, "_read_page", flaky)
     pdf = _pdf(tmp_path / "bill.pdf", [{"lines": [BILL]}, {"lines": [BILL]}, {"lines": [BILL]}])
-    doc = PdfParser().parse(pdf)
+    doc = _parse(pdf)
     assert doc.pages == (Page(BILL), Page("", needs_vision=True), Page(BILL))
-
-
-def test_pdf_that_cannot_be_opened_is_a_read_error_retried_later(tmp_path):
-    pdf = _pdf(tmp_path / "bill.pdf", [{"lines": [BILL]}])
-    pdf.chmod(0)
-    try:
-        with pytest.raises(OSError):
-            PdfParser().parse(pdf)
-    finally:
-        pdf.chmod(0o644)
 
 
 def test_unlocked_copy_saved_over_a_locked_pdf_is_ok(clerk, inbox):
@@ -165,3 +159,16 @@ def test_unlocked_copy_saved_over_a_locked_pdf_is_ok(clerk, inbox):
     clerk.scan()
     doc = next(d for d in clerk.list_documents() if d["path"].endswith("statement.pdf"))
     assert (doc["parse_status"], doc["parse_error"]) == ("ok", None)
+
+
+def test_unreadable_pdf_is_retried_not_recorded(clerk, inbox):
+    pdf = _pdf(inbox / "bill.pdf", [{"lines": [BILL]}])
+    pdf.chmod(0)
+    try:
+        r = clerk.scan()
+        assert [p.rsplit("/", 1)[-1] for p in r.failed] == ["bill.pdf"]
+        assert not any(d["path"].endswith("bill.pdf") for d in clerk.list_documents())
+    finally:
+        pdf.chmod(0o644)
+    clerk.scan()
+    assert any(d["path"].endswith("bill.pdf") for d in clerk.list_documents())

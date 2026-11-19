@@ -50,8 +50,7 @@ class DocxParser:
 
     suffixes = frozenset({".docx"})
 
-    def parse(self, path: Path) -> ParsedDocument:
-        data = path.read_bytes()  # an OSError here is a read problem: retried next scan
+    def parse(self, data: bytes, path: Path) -> ParsedDocument:
         if data.startswith(OLE_MAGIC):
             if ENCRYPTED_PACKAGE in data:
                 raise ParseError("password protected")

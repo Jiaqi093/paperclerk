@@ -36,17 +36,13 @@ class PdfParser:
 
     suffixes = frozenset({".pdf"})
 
-    def parse(self, path: Path) -> ParsedDocument:
+    def parse(self, data: bytes, path: Path) -> ParsedDocument:
         with _pdfium_lock:
             try:
-                pdf = pdfium.PdfDocument(path)
+                pdf = pdfium.PdfDocument(data)
             except pdfium.PdfiumError as e:
-                code = getattr(e, "err_code", None)
-                if code == pdfium_c.FPDF_ERR_PASSWORD:
+                if getattr(e, "err_code", None) == pdfium_c.FPDF_ERR_PASSWORD:
                     raise ParseError("password protected") from e
-                if code == pdfium_c.FPDF_ERR_FILE:
-                    # Couldn't open the file (permissions): a read problem, retried next scan.
-                    raise OSError(f"can't open {path}") from e
                 # Also covers a valid PDF with zero pages: PDFium rejects those on open.
                 raise ParseError("damaged or not a valid PDF") from e
             try:

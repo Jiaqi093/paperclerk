@@ -21,7 +21,7 @@ NS = (
 def _parse(document: docx.document.Document, tmp_path: Path):
     path = tmp_path / "doc.docx"
     document.save(path)
-    doc = DocxParser().parse(path)
+    doc = DocxParser().parse(path.read_bytes(), path)
     assert len(doc.pages) == 1
     return doc.pages[0]
 
@@ -123,14 +123,14 @@ def test_password_protected_docx_says_so(tmp_path):
     ole = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\0" * 504
     path.write_bytes(ole + "EncryptedPackage".encode("utf-16-le"))
     with pytest.raises(ParseError, match="password protected"):
-        DocxParser().parse(path)
+        DocxParser().parse(path.read_bytes(), path)
 
 
 def test_damaged_docx_raises_parse_error(tmp_path):
     path = tmp_path / "bad.docx"
     path.write_bytes(b"PK\x03\x04 not really a zip")
     with pytest.raises(ParseError, match="damaged"):
-        DocxParser().parse(path)
+        DocxParser().parse(path.read_bytes(), path)
 
 
 def test_scan_indexes_docx(clerk, inbox):
@@ -254,7 +254,7 @@ def test_old_doc_renamed_to_docx(tmp_path):
     path = tmp_path / "old.docx"
     path.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\0" * 504)
     with pytest.raises(ParseError, match=r"\.doc"):
-        DocxParser().parse(path)
+        DocxParser().parse(path.read_bytes(), path)
 
 
 def test_zip_bomb_is_refused(tmp_path, monkeypatch):
@@ -266,4 +266,4 @@ def test_zip_bomb_is_refused(tmp_path, monkeypatch):
     path = tmp_path / "big.docx"
     d.save(path)
     with pytest.raises(ParseError, match="too large"):
-        DocxParser().parse(path)
+        DocxParser().parse(path.read_bytes(), path)

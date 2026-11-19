@@ -1005,6 +1005,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
+    { name = "charset-normalizer" },
     { name = "fastapi" },
     { name = "langgraph" },
     { name = "pydantic" },
@@ -1025,6 +1026,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40" },
+    { name = "charset-normalizer", specifier = ">=3.3" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "langgraph", specifier = ">=0.2" },
     { name = "pydantic", specifier = ">=2.7" },

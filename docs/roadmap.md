@@ -39,8 +39,9 @@ schema migrations.
       them)_: a `document_pages (document_id, page_no, text)` table and a `needs_vision` column.
       F2 needs the flag to route scans to vision; F5 needs pages for chunking and page citations.
 - [ ] `parser_version` on documents, so content marked `failed` is retried after a parser fix
-- [ ] Hash and parse the same bytes (read once), so a file changing between the two can't pair
-      one content's hash with another's text
+- [x] Hash and parse the same bytes (read once; a file written while being read is retried);
+      files over 100 MB are hashed but not parsed; text files in any encoding (GBK, Big5,
+      UTF-16) via charset-normalizer
 - [ ] Small fixes from the PR #2 review: `paths_under` as a range query instead of a full table
       scan; show `removed` in the web UI; clearer label than "failed to parse"; guard migrate's
       `ROLLBACK` with `in_transaction`; don't re-report empty unreadable folders on every scan

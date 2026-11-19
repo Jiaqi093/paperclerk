@@ -32,4 +32,7 @@ class ParsedDocument:
 class Parser(Protocol):
     suffixes: frozenset[str]
 
-    def parse(self, path: Path) -> ParsedDocument: ...
+    def parse(self, data: bytes, path: Path) -> ParsedDocument:
+        """Parse a file's content. `data` is the whole file, read once by the caller so the
+        text always matches the content hash; `path` is for messages and type hints only."""
+        ...

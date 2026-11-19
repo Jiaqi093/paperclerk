@@ -11,6 +11,6 @@ class ImageParser:
 
     suffixes = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 
-    def parse(self, path: Path) -> ParsedDocument:
+    def parse(self, data: bytes, path: Path) -> ParsedDocument:
         mime = mimetypes.guess_type(path.name)[0] or "image/png"
         return ParsedDocument(mime_type=mime, pages=(Page("", needs_vision=True),))
