@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from paperclerk.ingest.parsers.base import ParsedDocument, Parser
+from paperclerk.ingest.parsers.base import Page, ParsedDocument, ParseError, Parser
 from paperclerk.ingest.parsers.docx import DocxParser
 from paperclerk.ingest.parsers.image import ImageParser
 from paperclerk.ingest.parsers.pdf import PdfParser
@@ -20,4 +20,4 @@ def parser_for(path: Path) -> Parser | None:
     return next((p for p in _PARSERS if suffix in p.suffixes), None)
 
 
-__all__ = ["ParsedDocument", "Parser", "SUPPORTED_SUFFIXES", "parser_for"]
+__all__ = ["Page", "ParseError", "ParsedDocument", "Parser", "SUPPORTED_SUFFIXES", "parser_for"]

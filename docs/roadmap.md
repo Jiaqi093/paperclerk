@@ -29,18 +29,36 @@ made from numbers.
 Done in PR #2: incremental scan, content-hash identity, `document_paths`, error isolation,
 schema migrations.
 
-- [ ] PDF parser (PyMuPDF): text per page; under `MIN_CHARS_PER_PAGE` (30) chars per page on
-      average → `needs_vision`
-- [ ] DOCX parser (python-docx): paragraphs and tables
-- [ ] Store per-page text and `needs_vision` _(new — parsers return them, the database drops
+- [x] PDF parser (pypdfium2, not PyMuPDF: AGPL): text per page; a page with under
+      `MIN_CHARS_PER_PAGE` (30) chars and a picture or outlined text on it, or mostly covered by
+      images with little text, gets `needs_vision`. Failure reasons ("password protected") stored in `parse_error`.
+- [x] DOCX parser (python-docx, reading the XML): paragraphs, tables as Markdown, headers and
+      footers, text boxes; tracked deletions and comments skipped; one page. A body with an
+      image and little text gets `needs_vision`. Old `.doc` stays unsupported.
+- [x] Store per-page text and `needs_vision` _(new — parsers return them, the database drops
       them)_: a `document_pages (document_id, page_no, text)` table and a `needs_vision` column.
       F2 needs the flag to route scans to vision; F5 needs pages for chunking and page citations.
-- [ ] `parser_version` on documents, so content marked `failed` is retried after a parser fix
-- [ ] Hash and parse the same bytes (read once), so a file changing between the two can't pair
-      one content's hash with another's text
-- [ ] Small fixes from the PR #2 review: `paths_under` as a range query instead of a full table
-      scan; show `removed` in the web UI; clearer label than "failed to parse"; guard migrate's
-      `ROLLBACK` with `in_transaction`; don't re-report empty unreadable folders on every scan
+- [x] `parser_version`: each parser has a `version`; bumping it re-parses every file of that
+      type once. Same pages → only the version is updated; changed pages are replaced (F2:
+      mark extractions stale then, never overwrite `human_verified`). **Bump the version
+      whenever a parser change could alter its output.**
+- [x] Cloud-only files (iCloud "Optimize Mac Storage", Dropbox, OneDrive: macOS
+      `SF_DATALESS`) are never read, so scans don't download them; reported in
+      `cloud_only`, known ones keep their paths. Not yet tested on a real sync folder.
+- [x] Small fixes from the PR #2 review: `paths_under` as a range query; web shows removed,
+      cloud-only and failure reasons, plus a status column; migrate's `ROLLBACK` guarded; the
+      scan takes the database lock per file, so the API stays responsive during a scan.
+      (Unreadable folders are still reported on every scan, on purpose.)
+
+Real-folder check (2026-11-20, 40 real bills: energy, water, internet, insurance, tickets):
+all parsed, no failures, rescan does no work. It found two bugs, fixed in PdfParser v2: a nearly
+empty last page was flagged for vision, and PDFium's U+FFFE hyphen marker leaked into text.
+A second check on all of ~/Documents (114 files: 94 PDF, 3 DOCX, 4 JPG, 13 Markdown; only
+statistics looked at, no file names or text): all parsed, no failures; 3 exact copies merged.
+6 scanned PDFs and 1 mixed one were flagged; one PDF had its text drawn as vector outlines
+with no text layer, and only 1 of its 6 pages was flagged. PdfParser v3 finds outlines by
+rendering the page small and counting lines of ink (all 6 flagged now). DOCX and images parsed,
+but their text quality wasn't inspected (privacy).
 
 **Done when:** a real folder mixing text PDFs, scanned PDFs, DOCX and images scans cleanly; every
 document has text or `needs_vision`; encrypted and corrupt files have tests.
@@ -71,6 +89,8 @@ first real numbers.
 - [ ] `AnthropicClient.structured()`: forced tool call, Pydantic validation, one retry on failure
 - [ ] Classification prompt (`src/paperclerk/extract/prompts/classify.md`); `needs_vision` documents and images go
       through vision
+- [ ] Vision input per type: PDF pages flagged `needs_vision` rendered to images (pypdfium2);
+      images as-is; DOCX can't be rendered without LibreOffice, so send its embedded pictures
 - [ ] Results in `extractions`; low confidence goes to the review queue
 - [ ] Review queue in the web UI: confirm or correct fields; corrected rows marked
       `human_verified`

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import os
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from paperclerk import __version__
 from paperclerk.config import Settings, load_settings
-from paperclerk.core import PaperClerk
+from paperclerk.core import PaperClerk, ScanInProgress
 
 
 class Health(BaseModel):
@@ -24,6 +24,9 @@ class DocumentOut(BaseModel):
     source: str
     mime_type: str | None
     size_bytes: int | None
+    parse_status: str | None  # ok / unsupported / failed; None = not parsed yet
+    parse_error: str | None  # why parsing failed, for the user
+    needs_vision: bool  # some page has no usable text: F2 sends it to the vision model
     created_at: str
 
 
@@ -34,6 +37,8 @@ class ScanOut(BaseModel):
     removed: int
     skipped: list[str]
     failed: list[str]
+    cloud_only: list[str]
+    reasons: dict[str, str]  # failed path -> why
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -61,7 +66,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/scan", response_model=ScanOut)
     def scan(c: PaperClerk = Depends(clerk)) -> ScanOut:
-        r = c.scan()
+        try:
+            r = c.scan()
+        except ScanInProgress as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
         return ScanOut(
             seen=r.seen,
             new=r.new,
@@ -69,6 +77,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             removed=r.removed,
             skipped=r.skipped,
             failed=r.failed,
+            cloud_only=r.cloud_only,
+            reasons=r.reasons,
         )
 
     # Planned: /api/bills, /api/subscriptions (F5)

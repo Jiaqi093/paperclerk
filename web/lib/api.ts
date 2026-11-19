@@ -10,6 +10,9 @@ export type DocumentOut = {
   source: "local" | "gmail";
   mime_type: string | null;
   size_bytes: number | null;
+  parse_status: "ok" | "unsupported" | "failed" | null;
+  parse_error: string | null;
+  needs_vision: boolean;
   created_at: string;
 };
 
@@ -20,11 +23,24 @@ export type ScanOut = {
   removed: number;
   skipped: string[];
   failed: string[];
+  cloud_only: string[];
+  reasons: Record<string, string>;
 };
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store", ...init });
-  if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${path} failed: ${res.status}`);
+  if (!res.ok) {
+    throw new ApiError(`${init?.method ?? "GET"} ${path} failed: ${res.status}`, res.status);
+  }
   return res.json() as Promise<T>;
 }
 

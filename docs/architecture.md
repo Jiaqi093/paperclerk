@@ -91,3 +91,18 @@ as marked data, never as instructions, and model output that touches the filesys
 filenames) is validated by the executor.
 **Why:** anyone can email you a "bill". Prompt injection is the main attack surface; the
 executor's rules in code (§4) are the layer that can't be talked out of.
+
+## 11. PDF library: pypdfium2, not PyMuPDF
+
+**Decision:** parse PDFs with pypdfium2 (PDFium, Apache-2.0/BSD).
+**Alternatives:** PyMuPDF (equally capable, but AGPL-3.0: depending on it would put the whole
+project, including a hosted demo, under AGPL terms, contradicting the MIT license); pypdf
+(pure Python, weaker text extraction, can't render pages for the vision model).
+**Why:** same capabilities this project needs (text per page, image positions for scan
+detection, rendering pages to images for F2) under a license compatible with MIT.
+
+**Scan detection is per page:** a page needs vision when it has under 30 visible
+characters and something to look at (pictures covering at least 5% of it, or text converted
+to vector outlines: 20+ shapes and 10+ lines of ink when rendered small), or when images cover at least half of it and it has at most 200 characters (a phone
+scan with a stamped line of text). A nearly empty page (a heading in a frame) isn't sent. Mixed PDFs then send only their scanned pages as images. Thresholds
+are starting points to tune on the F6 eval set.

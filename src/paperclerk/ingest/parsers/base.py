@@ -1,21 +1,42 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from paperclerk.models import PAGE_SEPARATOR, Page
 
-@dataclass
+__all__ = ["PAGE_SEPARATOR", "Page", "ParseError", "ParsedDocument", "Parser"]
+
+
+class ParseError(Exception):
+    """The content can't be parsed, for a known reason. str(e) is shown to the user."""
+
+
+@dataclass(frozen=True)
 class ParsedDocument:
-    text: str
     mime_type: str
-    # Page-level text (1-based page = index + 1) so answers can cite pages.
-    pages: list[str] = field(default_factory=list)
-    # True when there is little or no text layer (scans, photos): send to a vision model.
-    needs_vision: bool = False
+    # In order: pages[0] is page 1, so answers can cite pages. Formats without fixed pages
+    # (plain text, DOCX, images) are one page.
+    pages: tuple[Page, ...]
+
+    @property
+    def text(self) -> str:
+        return PAGE_SEPARATOR.join(p.text for p in self.pages)
+
+    @property
+    def needs_vision(self) -> bool:
+        return any(p.needs_vision for p in self.pages)
 
 
 class Parser(Protocol):
     suffixes: frozenset[str]
+    # Bump when a change could alter what this parser returns for some file (a bug fix, new
+    # content read): the next scan re-parses every file of this type. Documents whose text
+    # comes out the same aren't touched.
+    version: int
 
-    def parse(self, path: Path) -> ParsedDocument: ...
+    def parse(self, data: bytes, path: Path) -> ParsedDocument:
+        """Parse a file's content. `data` is the whole file, read once by the caller so the
+        text always matches the content hash; `path` is for messages and type hints only."""
+        ...

@@ -1,5 +1,6 @@
 import os
 
+from paperclerk.db import repo
 from paperclerk.ingest.parsers.text import TextParser
 
 
@@ -29,14 +30,13 @@ def _bump_mtime(path, by=10):
 
 
 def _texts(clerk):
-    return [r[0] for r in clerk.conn.execute("SELECT text FROM documents ORDER BY id")]
+    ids = [r[0] for r in clerk.conn.execute("SELECT id FROM documents ORDER BY id")]
+    return [repo.document_text(clerk.conn, i) for i in ids]
 
 
 def _path_texts(clerk):
-    rows = clerk.conn.execute(
-        "SELECT p.path, d.text FROM document_paths p JOIN documents d ON d.id = p.document_id"
-    )
-    return {r[0].rsplit("/", 1)[-1]: r[1] for r in rows}
+    rows = clerk.conn.execute("SELECT path, document_id FROM document_paths")
+    return {r[0].rsplit("/", 1)[-1]: repo.document_text(clerk.conn, r[1]) for r in rows}
 
 
 def test_new_content_at_same_path_is_a_new_document_and_old_text_is_kept(clerk, inbox):
@@ -93,7 +93,7 @@ def test_missing_watched_folder_keeps_its_paths(clerk, inbox, tmp_path):
 
 
 def test_file_is_reparsed_once_its_parser_lands(clerk, inbox, monkeypatch):
-    def not_yet(self, path):
+    def not_yet(self, data, path):
         raise NotImplementedError
 
     monkeypatch.setattr(TextParser, "parse", not_yet)
@@ -114,15 +114,17 @@ def test_one_broken_file_does_not_stop_the_scan(clerk, inbox, monkeypatch):
     broken.write_text("garbage", encoding="utf-8")
     real_parse = TextParser.parse
 
-    def flaky(self, path):
+    def flaky(self, data, path):
         if path.name == "broken.txt":
             raise ValueError("malformed file")
-        return real_parse(self, path)
+        return real_parse(self, data, path)
 
     monkeypatch.setattr(TextParser, "parse", flaky)
     r = clerk.scan()
     assert [p.rsplit("/", 1)[-1] for p in r.failed] == ["broken.txt"]
     assert r.new == 3  # note.txt and receipt.png are still indexed
+    errors = {d["path"].rsplit("/", 1)[-1]: d["parse_error"] for d in clerk.list_documents()}
+    assert errors["broken.txt"] == "damaged or unreadable file"
 
     assert clerk.scan().seen == 0  # not retried while the file is unchanged
     broken.write_text("garbage, fixed", encoding="utf-8")
@@ -161,17 +163,21 @@ def test_overlapping_watched_folders_settle(inbox, tmp_path):
 
 
 def test_transient_read_error_is_not_recorded_as_failed_content(clerk, inbox, monkeypatch):
-    real_parse = TextParser.parse
+    from pathlib import Path
 
-    def locked(self, path):
-        raise PermissionError(path)
+    real_open = Path.open
 
-    monkeypatch.setattr(TextParser, "parse", locked)
+    def locked(self, mode="r", *args, **kwargs):
+        if self.name == "note.txt" and mode == "rb":
+            raise PermissionError(self)
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", locked)
     r = clerk.scan()
     assert [p.rsplit("/", 1)[-1] for p in r.failed] == ["note.txt"]
     assert "note.txt" not in _path_texts(clerk)  # nothing recorded: retried next scan
 
-    monkeypatch.setattr(TextParser, "parse", real_parse)
+    monkeypatch.undo()
     r = clerk.scan()
     assert (r.new, r.failed) == (1, [])
     assert _path_texts(clerk)["note.txt"] == "Electricity bill due 24 Oct, $214.37"
@@ -191,7 +197,7 @@ def _keep_mtime_write(path, data):
 
 
 def test_reparse_of_unchanged_looking_file_does_not_rewrite_shared_copy(clerk, inbox, monkeypatch):
-    def not_yet(self, path):
+    def not_yet(self, data, path):
         raise NotImplementedError
 
     (inbox / "copy.txt").write_bytes((inbox / "note.txt").read_bytes())
@@ -257,3 +263,422 @@ def test_symlink_loop_is_ignored_quietly(clerk, inbox):
     (inbox / "loop.txt").symlink_to(inbox / "loop.txt")
     r = clerk.scan()
     assert (r.new, r.failed) == (2, [])
+
+
+def _pages_of(clerk, name):
+    doc_id = next(
+        r[1]
+        for r in clerk.conn.execute("SELECT path, document_id FROM document_paths")
+        if r[0].endswith("/" + name)
+    )
+    return repo.get_pages(clerk.conn, doc_id)
+
+
+def test_scan_stores_pages_and_flags_images_for_vision(clerk):
+    from paperclerk.ingest.parsers import Page
+
+    clerk.scan()
+    assert _pages_of(clerk, "note.txt") == [Page("Electricity bill due 24 Oct, $214.37")]
+    assert _pages_of(clerk, "receipt.png") == [Page("", needs_vision=True)]
+
+
+def test_reparse_replaces_pages_instead_of_appending(clerk, inbox, monkeypatch):
+    from paperclerk.ingest.parsers import Page, ParsedDocument
+
+    clerk.scan()
+    two_pages = ParsedDocument("text/plain", (Page("page one"), Page("page two")))
+    monkeypatch.setattr(TextParser, "parse", lambda self, data, path: two_pages)
+    note = inbox / "note.txt"
+    note.write_text("changed", encoding="utf-8")
+    _bump_mtime(note)
+    clerk.scan()
+    assert _pages_of(clerk, "note.txt") == [Page("page one"), Page("page two")]
+    assert _path_texts(clerk)["note.txt"] == "page one\n\npage two"
+
+
+def test_failed_reparse_clears_old_pages(clerk, inbox, monkeypatch):
+    clerk.scan()
+    doc_id = clerk.conn.execute(
+        "SELECT document_id FROM document_paths WHERE path LIKE '%note.txt'"
+    ).fetchone()[0]
+    # A document from before parse_status existed: old text, outcome never recorded.
+    clerk.conn.execute("UPDATE documents SET parse_status = NULL WHERE id = ?", (doc_id,))
+    clerk.conn.execute("DELETE FROM document_paths WHERE document_id = ?", (doc_id,))
+    clerk.conn.commit()
+
+    def broken(self, data, path):
+        raise ValueError("malformed")
+
+    monkeypatch.setattr(TextParser, "parse", broken)
+    clerk.scan()  # same content seen again, now unparseable
+    row = clerk.conn.execute("SELECT parse_status FROM documents WHERE id = ?", (doc_id,))
+    assert row.fetchone()[0] == "failed"
+    assert repo.get_pages(clerk.conn, doc_id) == []  # no stale text next to "failed"
+
+
+def test_hash_and_text_come_from_the_same_bytes(clerk, inbox, monkeypatch):
+    import hashlib
+
+    note = inbox / "note.txt"
+    october = note.read_bytes()
+    real_parse = TextParser.parse
+
+    def overwritten_meanwhile(self, data, path):
+        # The user saves November's bill over the file after it was read, before it's parsed.
+        if path.name == "note.txt":
+            path.write_text("Electricity bill due 24 Nov, $198.10", encoding="utf-8")
+            _bump_mtime(path)
+        return real_parse(self, data, path)
+
+    monkeypatch.setattr(TextParser, "parse", overwritten_meanwhile)
+    clerk.scan()
+    monkeypatch.undo()
+    row = clerk.conn.execute(
+        "SELECT id FROM documents WHERE sha256 = ?", (hashlib.sha256(october).hexdigest(),)
+    ).fetchone()
+    assert repo.document_text(clerk.conn, row[0]) == october.decode()  # October's hash, text
+
+    clerk.scan()  # the new mtime is noticed: November is indexed too
+    assert _path_texts(clerk)["note.txt"] == "Electricity bill due 24 Nov, $198.10"
+
+
+def _write_on_open(monkeypatch, name, times):
+    """Make the scan's read of `name` race a writer: every time the scan opens it (up to
+    `times`), the file is rewritten with longer content right after."""
+    from pathlib import Path
+
+    real_open = Path.open
+    writes = []
+
+    def racing_open(self, mode="r", *args, **kwargs):
+        f = real_open(self, mode, *args, **kwargs)
+        if self.name == name and mode == "rb" and len(writes) < times:
+            writes.append(1)
+            with open(self, "a", encoding="utf-8") as w:  # builtins.open: not patched
+                w.write(" (saving)")
+        return f
+
+    monkeypatch.setattr(Path, "open", racing_open)
+
+
+def test_file_written_once_while_being_read_is_read_again(clerk, inbox, monkeypatch):
+    _write_on_open(monkeypatch, "note.txt", times=1)  # e.g. a cloud-sync download
+    r = clerk.scan()
+    monkeypatch.undo()
+    assert r.failed == []
+    assert _path_texts(clerk)["note.txt"].endswith("(saving)")
+    assert clerk.scan().seen == 0  # the stored mtime and size are the re-read's: settled
+
+
+def test_file_that_keeps_changing_is_retried_next_scan(clerk, inbox, monkeypatch):
+    _write_on_open(monkeypatch, "note.txt", times=2)
+    r = clerk.scan()
+    monkeypatch.undo()
+    assert [p.rsplit("/", 1)[-1] for p in r.failed] == ["note.txt"]
+    assert "note.txt" not in _path_texts(clerk)  # nothing recorded
+    assert clerk.scan().failed == []
+    assert _path_texts(clerk)["note.txt"].endswith("(saving) (saving)")
+
+
+def test_huge_file_is_hashed_but_not_parsed(clerk, inbox, monkeypatch):
+    from paperclerk.core import service
+
+    monkeypatch.setattr(service, "MAX_PARSE_BYTES", 10)
+    (inbox / "copy.txt").write_bytes((inbox / "note.txt").read_bytes())
+    r = clerk.scan()
+    # copy.txt is scanned first; note.txt then reuses its (failed) document without parsing.
+    assert sorted(p.rsplit("/", 1)[-1] for p in r.failed) == ["copy.txt", "receipt.png"]
+    rows = clerk.conn.execute(
+        "SELECT p.path, d.id, d.parse_error FROM document_paths p "
+        "JOIN documents d ON d.id = p.document_id"
+    )
+    docs = {r[0].rsplit("/", 1)[-1]: (r[1], r[2]) for r in rows}
+    assert docs["note.txt"] == docs["copy.txt"]  # still deduplicated by hash
+    assert docs["note.txt"][1].startswith("too large to read")
+
+
+def _version(clerk, name):
+    return clerk.conn.execute(
+        "SELECT d.parser_version FROM document_paths p JOIN documents d ON d.id = p.document_id "
+        "WHERE p.path LIKE ?",
+        (f"%/{name}",),
+    ).fetchone()[0]
+
+
+def test_new_parser_version_retries_failures(clerk, inbox, monkeypatch):
+    real_parse = TextParser.parse
+
+    def buggy(self, data, path):
+        raise ValueError("parser bug")
+
+    monkeypatch.setattr(TextParser, "parse", buggy)
+    clerk.scan()
+    assert _path_texts(clerk)["note.txt"] is None  # failed
+
+    monkeypatch.setattr(TextParser, "parse", real_parse)  # the bug is fixed...
+    assert clerk.scan().seen == 0  # ...but the file didn't change: not retried
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)  # ...and released
+    r = clerk.scan()
+    assert (r.seen, r.updated, r.failed) == (1, 1, [])
+    assert _path_texts(clerk)["note.txt"] == "Electricity bill due 24 Oct, $214.37"
+    assert clerk.scan().seen == 0  # once per version
+
+
+def test_new_parser_version_with_the_same_text_only_updates_the_version(clerk, monkeypatch):
+    clerk.scan()
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    r = clerk.scan()
+    assert (r.seen, r.updated) == (1, 0)  # parsed again, nothing changed
+    assert _version(clerk, "note.txt") == TextParser.version
+    assert _version(clerk, "receipt.png") == 1  # other parsers' files untouched
+    assert clerk.scan().seen == 0
+
+
+def test_new_parser_version_that_reads_more_replaces_the_text(clerk, monkeypatch):
+    from paperclerk.ingest.parsers import Page, ParsedDocument
+
+    clerk.scan()
+    better = ParsedDocument("text/plain", (Page("Electricity bill due 24 Oct, $214.37 + GST"),))
+    monkeypatch.setattr(TextParser, "parse", lambda self, data, path: better)
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    r = clerk.scan()
+    assert (r.seen, r.updated) == (1, 1)
+    assert _path_texts(clerk)["note.txt"].endswith("+ GST")
+
+
+def test_documents_from_before_versions_are_parsed_once_more(clerk):
+    clerk.scan()
+    clerk.conn.execute("UPDATE documents SET parser_version = NULL")
+    clerk.conn.commit()
+    assert (clerk.scan().seen, clerk.scan().seen) == (2, 0)
+
+
+def test_raised_size_limit_retries_files_that_were_too_large(clerk, inbox, monkeypatch):
+    from paperclerk.core import service
+
+    monkeypatch.setattr(service, "MAX_PARSE_BYTES", 10)
+    clerk.scan()
+    assert _path_texts(clerk)["note.txt"] is None
+    assert clerk.scan().seen == 0  # still too large: left alone
+    monkeypatch.undo()  # the limit goes back up
+    clerk.scan()
+    assert _path_texts(clerk)["note.txt"] == "Electricity bill due 24 Oct, $214.37"
+
+
+def _cloud_only(monkeypatch, *names):
+    """Make the walk see `names` as iCloud/Dropbox placeholders, and fail any read of them."""
+    from pathlib import Path
+
+    from paperclerk.ingest.scanner import SF_DATALESS
+
+    real_stat, real_open = Path.stat, Path.open
+
+    class Placeholder:
+        def __init__(self, st):
+            self._st = st
+
+        def __getattr__(self, name):
+            return getattr(self._st, name)
+
+        st_flags = SF_DATALESS
+
+    def stat(self, *args, **kwargs):
+        st = real_stat(self, *args, **kwargs)
+        return Placeholder(st) if self.name in names else st
+
+    def no_download(self, mode="r", *args, **kwargs):
+        assert self.name not in names, f"{self.name} was read: that downloads it"
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    monkeypatch.setattr(Path, "open", no_download)
+
+
+def test_cloud_only_files_are_not_downloaded_or_forgotten(clerk, inbox, monkeypatch):
+    (inbox / "march.txt").write_text("Water bill $40", encoding="utf-8")
+    clerk.scan()
+    (inbox / "april.txt").write_text("Water bill $42", encoding="utf-8")
+    _cloud_only(monkeypatch, "march.txt", "april.txt")  # macOS evicts both to iCloud
+    r = clerk.scan()
+    assert sorted(p.rsplit("/", 1)[-1] for p in r.cloud_only) == ["april.txt", "march.txt"]
+    assert (r.removed, r.failed) == (0, [])
+    texts = _path_texts(clerk)
+    assert texts["march.txt"] == "Water bill $40"  # known: kept as it was
+    assert "april.txt" not in texts  # new: waits until downloaded
+
+    monkeypatch.undo()  # the user opens them: downloaded
+    clerk.scan()
+    assert _path_texts(clerk)["april.txt"] == "Water bill $42"
+
+
+def test_cloud_only_file_is_not_downloaded_for_a_new_parser_version(clerk, monkeypatch):
+    clerk.scan()
+    _cloud_only(monkeypatch, "note.txt")
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    assert clerk.scan().seen == 0  # the assert in no_download would fail the scan otherwise
+
+
+def test_read_refused_for_a_file_evicted_after_the_walk_counts_as_cloud_only(clerk, monkeypatch):
+    import errno
+    from pathlib import Path
+
+    real_open = Path.open
+
+    def evicted(self, mode="r", *args, **kwargs):
+        if self.name == "note.txt" and mode == "rb":
+            raise OSError(errno.EDEADLK, "Resource deadlock avoided", str(self))
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", evicted)
+    r = clerk.scan()
+    assert ([p.rsplit("/", 1)[-1] for p in r.cloud_only], r.failed) == (["note.txt"], [])
+
+
+def test_unimplemented_new_version_keeps_the_old_outcome_and_settles(clerk, monkeypatch):
+    clerk.scan()
+
+    def not_yet(self, data, path):
+        raise NotImplementedError
+
+    monkeypatch.setattr(TextParser, "parse", not_yet)
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    clerk.scan()
+    assert _path_texts(clerk)["note.txt"] == "Electricity bill due 24 Oct, $214.37"
+    assert clerk.scan().seen == 0 and not clerk.scan().skipped
+
+
+def test_new_version_that_only_changes_the_mime_type_is_stored(clerk, monkeypatch):
+    from paperclerk.ingest.parsers import Page, ParsedDocument
+
+    clerk.scan()
+    same_text = ParsedDocument("text/csv", (Page("Electricity bill due 24 Oct, $214.37"),))
+    monkeypatch.setattr(TextParser, "parse", lambda self, data, path: same_text)
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    clerk.scan()
+    mime = clerk.conn.execute(
+        "SELECT d.mime_type FROM document_paths p JOIN documents d ON d.id = p.document_id "
+        "WHERE p.path LIKE '%note.txt'"
+    ).fetchone()[0]
+    assert mime == "text/csv"
+
+
+def test_version_bump_with_copies_parses_the_shared_content_once(clerk, inbox, monkeypatch):
+    for name in ("a.txt", "b.txt"):
+        (inbox / name).write_bytes((inbox / "note.txt").read_bytes())
+    clerk.scan()
+    monkeypatch.setattr(TextParser, "version", TextParser.version + 1)
+    r = clerk.scan()
+    assert (r.seen, r.updated) == (1, 0)  # a.txt re-parses; b.txt and note.txt see v2
+    assert clerk.scan().seen == 0
+
+
+def test_document_list_stays_readable_during_a_scan(clerk, inbox, monkeypatch):
+    import threading
+
+    from paperclerk.core import service
+
+    real_iter = service.iter_candidate_files
+    first_done, release = threading.Event(), threading.Event()
+
+    def slow_walk(root, unreadable=None):
+        for i, info in enumerate(real_iter(root, unreadable)):
+            if i == 1:
+                first_done.set()
+                release.wait(5)  # the scan is "busy" between files
+            yield info
+
+    monkeypatch.setattr(service, "iter_candidate_files", slow_walk)
+    scan = threading.Thread(target=clerk.scan)
+    scan.start()
+    try:
+        assert first_done.wait(5)
+        docs = []
+        reader = threading.Thread(target=lambda: docs.extend(clerk.list_documents()))
+        reader.start()
+        reader.join(2)
+        assert not reader.is_alive(), "list_documents waited for the whole scan"
+        assert len(docs) == 1  # what's indexed so far
+    finally:
+        release.set()
+        scan.join(5)
+    assert len(clerk.list_documents()) == 2
+
+
+def test_failed_files_come_with_a_reason(clerk, inbox, monkeypatch):
+    from pathlib import Path
+
+    def broken(self, data, path):
+        raise ValueError("malformed")
+
+    real_open = Path.open
+
+    def locked(self, mode="r", *args, **kwargs):
+        if self.name == "receipt.png" and mode == "rb":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_open(self, mode, *args, **kwargs)
+
+    sub = inbox / "private"
+    sub.mkdir()
+    sub.chmod(0)
+    monkeypatch.setattr(TextParser, "parse", broken)
+    monkeypatch.setattr(Path, "open", locked)
+    try:
+        r = clerk.scan()
+    finally:
+        sub.chmod(0o755)
+    reasons = {p.rsplit("/", 1)[-1]: why for p, why in r.reasons.items()}
+    assert reasons == {
+        "note.txt": "damaged or unreadable file",
+        "receipt.png": "permission denied",
+        "private": "can't read (permission denied or unavailable)",
+    }
+    assert sorted(reasons) == sorted(p.rsplit("/", 1)[-1] for p in r.failed)
+
+
+def test_a_second_scan_while_one_runs_is_refused(clerk, monkeypatch):
+    import threading
+
+    import pytest
+
+    from paperclerk.core import ScanInProgress, service
+
+    real_iter = service.iter_candidate_files
+    started, release = threading.Event(), threading.Event()
+
+    def slow_walk(root, unreadable=None):
+        started.set()
+        release.wait(5)
+        yield from real_iter(root, unreadable)
+
+    monkeypatch.setattr(service, "iter_candidate_files", slow_walk)
+    first = threading.Thread(target=clerk.scan)
+    first.start()
+    try:
+        assert started.wait(5)
+        with pytest.raises(ScanInProgress):
+            clerk.scan()
+    finally:
+        release.set()
+        first.join(5)
+    monkeypatch.undo()
+    assert clerk.scan().seen == 0  # the lock was released
+
+
+def test_database_error_after_a_parse_failure_reports_the_database(clerk, monkeypatch):
+    import sqlite3
+
+    def broken(self, data, path):
+        raise ValueError("malformed")
+
+    real_upsert = repo.upsert_document
+
+    def busy(conn, **kwargs):
+        if kwargs.get("parse_status") == "failed":
+            raise sqlite3.OperationalError("database is locked")
+        return real_upsert(conn, **kwargs)
+
+    monkeypatch.setattr(TextParser, "parse", broken)
+    monkeypatch.setattr(repo, "upsert_document", busy)
+    r = clerk.scan()
+    reasons = {p.rsplit("/", 1)[-1]: why for p, why in r.reasons.items()}
+    assert reasons == {"note.txt": "database busy; retried next scan"}

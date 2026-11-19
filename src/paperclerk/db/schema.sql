@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS documents (
     mime_type     TEXT,
     size_bytes    INTEGER,
     mtime         REAL,                         -- legacy; see document_paths.mtime
-    text          TEXT,                         -- extracted text
+    text          TEXT,                         -- dropped by migration 3; see document_pages
     created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
 );

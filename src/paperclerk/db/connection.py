@@ -31,6 +31,29 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
            SELECT path, id, COALESCE(mtime, 0), COALESCE(size_bytes, 0) FROM documents
            WHERE source = 'local' AND path IS NOT NULL ORDER BY id DESC""",
     ),
+    # 3: text per page, with a per-page vision flag, replacing documents.text. Pages let
+    #    answers cite a page and let F2 send only scanned pages to the vision model; a
+    #    document's full text is its pages joined (repo.document_text). Existing text becomes
+    #    page 1; images (no text layer) are flagged for vision.
+    (
+        """CREATE TABLE document_pages (
+            document_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            page_no      INTEGER NOT NULL CHECK (page_no >= 1),
+            text         TEXT    NOT NULL,
+            needs_vision INTEGER NOT NULL DEFAULT 0 CHECK (needs_vision IN (0, 1)),
+            PRIMARY KEY (document_id, page_no)
+        )""",
+        """INSERT INTO document_pages (document_id, page_no, text, needs_vision)
+           SELECT id, 1, COALESCE(text, ''), COALESCE(mime_type LIKE 'image/%', 0) FROM documents
+           WHERE text IS NOT NULL OR parse_status = 'ok'""",
+        "ALTER TABLE documents DROP COLUMN text",
+    ),
+    # 4: why the last parse failed, in words a user can act on ("password protected"), so
+    #    the UI can show it. NULL unless parse_status is 'failed'.
+    ("ALTER TABLE documents ADD COLUMN parse_error TEXT",),
+    # 5: version of the parser that produced the outcome (Parser.version; NULL = 0, i.e.
+    #    before versions existed), so bumping a parser's version re-parses its file type.
+    ("ALTER TABLE documents ADD COLUMN parser_version INTEGER",),
 )
 
 
@@ -47,8 +70,17 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+# ALTER TABLE ... DROP COLUMN (migration 3) needs SQLite 3.35.
+MIN_SQLITE = (3, 35, 0)
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     """Create tables if they don't exist, then apply pending migrations. Safe on every startup."""
+    if sqlite3.sqlite_version_info < MIN_SQLITE:
+        raise RuntimeError(
+            f"paperclerk needs SQLite {'.'.join(map(str, MIN_SQLITE))}+, "
+            f"but Python is linked against {sqlite3.sqlite_version}"
+        )
     schema = resources.files("paperclerk.db").joinpath("schema.sql").read_text(encoding="utf-8")
     conn.executescript(schema)
     migrate(conn)
@@ -73,5 +105,8 @@ def migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f"PRAGMA user_version = {version + 1}")
             conn.execute("COMMIT")
         except BaseException:
-            conn.execute("ROLLBACK")
+            # Don't let a failing ROLLBACK (e.g. SQLite already rolled back on an I/O error)
+            # hide the error that caused it.
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
             raise
