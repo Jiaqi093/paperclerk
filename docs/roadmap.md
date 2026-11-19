@@ -1,0 +1,173 @@
+# Roadmap
+
+The working plan, stage by stage. Tick items as they land. The README keeps a one-line-per-week
+summary; design decisions and their reasons go in [architecture.md](architecture.md).
+
+Each stage lists what it must deliver and a **done when** check. Items marked _(new)_ were added
+in the November 2026 plan review: the original 4-week plan covered the product features, and
+these add the engineering around the model (evals, cost, observability, safety, retrieval).
+
+## Timeline (6 weeks)
+
+| Week | Focus |
+|---|---|
+| 1 | Finish F1 · F2 basics (LLM client, call log, extraction) · F6 v1 (~30 labels + synthetic set) |
+| 2 | Finish F2 (review UI, background jobs, model routing, caching) · first F6 numbers |
+| 3 | F4 organize agent (hand-written + LangGraph, safety tests) |
+| 4 | F3 Gmail sync (`document_sources`, injection defense, dedupe) |
+| 5 | F5 retrieval, Q&A, bills dashboard, streaming |
+| 6 | MCP server, Docker, hosted demo, README numbers, demo video |
+| later | F7 distillation (stretch) |
+
+F6 starts alongside F2 rather than after it: prompt, model and cost decisions in F2 should be
+made from numbers.
+
+---
+
+## F1 — Local file ingest
+
+Done in PR #2: incremental scan, content-hash identity, `document_paths`, error isolation,
+schema migrations.
+
+- [ ] PDF parser (PyMuPDF): text per page; under `MIN_CHARS_PER_PAGE` (30) chars per page on
+      average → `needs_vision`
+- [ ] DOCX parser (python-docx): paragraphs and tables
+- [ ] Store per-page text and `needs_vision` _(new — parsers return them, the database drops
+      them)_: a `document_pages (document_id, page_no, text)` table and a `needs_vision` column.
+      F2 needs the flag to route scans to vision; F5 needs pages for chunking and page citations.
+- [ ] `parser_version` on documents, so content marked `failed` is retried after a parser fix
+- [ ] Hash and parse the same bytes (read once), so a file changing between the two can't pair
+      one content's hash with another's text
+- [ ] Small fixes from the PR #2 review: `paths_under` as a range query instead of a full table
+      scan; show `removed` in the web UI; clearer label than "failed to parse"; guard migrate's
+      `ROLLBACK` with `in_transaction`; don't re-report empty unreadable folders on every scan
+
+**Done when:** a real folder mixing text PDFs, scanned PDFs, DOCX and images scans cleanly; every
+document has text or `needs_vision`; encrypted and corrupt files have tests.
+
+## F6 — Evals (starts with F2)
+
+- [ ] `labels.jsonl` (format in `evals/labels.example.jsonl`) and ~100 labelled documents covering every `DocType`
+- [ ] Metrics: `doc_type` accuracy, per-field match, review-queue precision, dedupe
+      precision/recall; results appended to `evals/results.md`
+- [ ] Synthetic dataset _(new)_: generated invoices, receipts and renewal emails (PDF and image)
+      that can be published, so results are reproducible. Real documents stay a private
+      supplement in `evals/data/`.
+- [ ] Field matching rules _(new)_: amount within 0.01; vendor names normalized
+      ("Origin Energy Pty Ltd" = "Origin Energy"); dates compared as dates
+- [ ] Confidence calibration _(new)_: does 0.9 confidence mean ~90% correct? Set
+      `review_threshold` (now 0.8) from this, not by guess.
+- [ ] Cost and latency recorded with every run _(new)_, so each change reports accuracy and cost
+- [ ] CI _(new)_: scoring code runs on every PR against cached model outputs (free); full runs
+      that call the API are triggered manually
+- [ ] Later suites _(new)_: prompt-injection set (F3/F4), retrieval recall@k and MRR (F5),
+      Q&A answers graded by an LLM judge that is checked against human grades (F5)
+
+**Done when:** one command prints accuracy, cost per document and latency; the README shows the
+first real numbers.
+
+## F2 — Classification and extraction
+
+- [ ] `AnthropicClient.structured()`: forced tool call, Pydantic validation, one retry on failure
+- [ ] Classification prompt (`src/paperclerk/extract/prompts/classify.md`); `needs_vision` documents and images go
+      through vision
+- [ ] Results in `extractions`; low confidence goes to the review queue
+- [ ] Review queue in the web UI: confirm or correct fields; corrected rows marked
+      `human_verified`
+- [ ] `llm_calls` table _(new)_: model, input/output/cached tokens, latency, cost, purpose for
+      every call; a small usage panel in the UI
+- [ ] `prompt_version` _(new)_ stored with every extraction, next to the model, so evals can
+      compare versions
+- [ ] Cache by content _(new)_: same sha256 + prompt version + model → no second call
+- [ ] Model routing _(new)_: Haiku first, Sonnet for low-confidence results; F6 must show
+      accuracy holds
+- [ ] Prompt caching for the fixed system prompt _(new)_
+- [ ] Background jobs _(new)_: scan and extraction run off the request thread; the API returns a
+      job id, the UI shows progress; rate limits and retries handled
+- [ ] Batch API for the first bulk import _(new, optional)_
+
+**Done when:** F6 reports F2 accuracy; the README shows cost per document before and after
+routing and caching.
+
+## F4 — Organize agent
+
+- [ ] The model outputs a `Plan` (data); the UI previews it and the user picks which ops to apply
+- [ ] Executor safety rules in code: only inside watched folders, never overwrite, never delete
+- [ ] `operations` log; undo by batch
+- [ ] LangGraph `interrupt` for approval, SQLite checkpointer, resumable after restart
+- [ ] Hand-written and LangGraph versions; comparison recorded in [architecture.md §5](architecture.md#5-where-langgraph-is-used--and-where-it-isnt)
+- [ ] Update `document_paths` in the same transaction as each move, so the next scan doesn't see
+      a delete plus an add
+- [ ] Re-check each file before executing _(new)_: it may have changed or vanished since the plan
+- [ ] Validate `suggested_filename` _(new)_: it comes from document content, which may be
+      written by someone else. Reject path traversal (`../`), separators and illegal characters.
+- [ ] Undo conflicts _(new)_: the original location is taken, or the file changed since the move
+- [ ] Injection tests _(new)_: documents whose text tells the agent to move or rename files;
+      the executor must refuse anything outside the rules
+
+**Done when:** plan → preview → approve → execute → undo works end to end; all safety tests
+pass; the hand-written vs LangGraph comparison is written up.
+
+## F3 — Gmail sync
+
+- [ ] OAuth with the read-only scope
+- [ ] Incremental sync with `historyId`
+- [ ] Attachments hashed; exact duplicates of local files collapse to one document
+- [ ] `document_sources` table: one content can be both in email and on disk, but
+      `documents.source` holds only one
+- [ ] Email bodies as documents _(new)_: many renewal notices have no attachment
+- [ ] Prompt-injection defense _(new)_: anyone can email you, so this is the main attack
+      surface. Email content is passed as marked data, separate from instructions; the F4
+      executor rules are the second layer; F6 measures attack success rate.
+- [ ] Near-duplicates: vendor + amount + date matching, with embedding similarity to find
+      candidates first _(new)_ (same invoice as an emailed PDF and a phone photo)
+- [ ] OAuth token in the macOS Keychain, not a plain file _(new)_
+
+**Done when:** after syncing a real inbox, an invoice in both email and a folder counts once;
+dedupe precision/recall are measured; injection success rate is 0.
+
+## F5 — Bills dashboard and Q&A
+
+- [ ] Dashboard: bills due this month, subscriptions renewing soon
+- [ ] Subscription aggregation _(new — the table exists, the logic doesn't)_: recurring bills
+      from one vendor become one subscription
+- [ ] LangGraph Q&A with tools `query_bills`, `query_subscriptions`, `search_documents`,
+      `read_document`
+- [ ] Every answer cites its source documents
+- [ ] Hybrid `search_documents` _(new)_: FTS5 keyword search + sqlite-vec vector search, merged
+      with reciprocal rank fusion, over per-page chunks from F1; local embedding model
+- [ ] Citation check _(new)_: the cited page actually contains the claim
+- [ ] Streaming answers _(new)_
+- [ ] Dynamic few-shot for F2 _(new)_: retrieve similar `human_verified` documents into the
+      extraction prompt; F6 measures the gain
+- [ ] Q&A evals _(new)_: question/answer set, LLM-judge grading, retrieval recall@k
+
+**Done when:** the dashboard works on real data; Q&A has eval numbers; hybrid search is compared
+against keyword-only.
+
+## Week 6 — Ship
+
+- [ ] MCP server (read-only tools; it can't execute organize plans)
+- [ ] Tune on eval results
+- [ ] Docker Compose one-command start _(new)_
+- [ ] Hosted demo on the synthetic dataset _(new)_
+- [ ] README with all key numbers (accuracy, cost per document, latency, injection success rate)
+- [ ] Demo video
+
+## F7 — Distillation (stretch)
+
+- [ ] Fine-tune or distill a small local model on Claude outputs plus `human_verified`
+      corrections; compare accuracy, cost and speed with F6 ([architecture.md §6](architecture.md#6-thin-llm-interface))
+
+---
+
+## Decisions
+
+The reasoning behind the technical choices is in architecture.md §8–§10.
+
+- **6 weeks, not 4.** If time runs short, cut the hosted demo and model routing first; keep
+  injection defense and evals.
+- **Local embeddings** (a small model such as bge-small via ONNX, no PyTorch): document text
+  never goes to a third party, in line with the privacy goal, at some cost in quality.
+- **Eval data:** a public synthetic set plus a small private set of real documents.
+- **Distillation** is a stretch goal, outside the 6 weeks.

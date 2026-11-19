@@ -12,6 +12,6 @@ class PdfParser:
     suffixes = frozenset({".pdf"})
 
     def parse(self, path: Path) -> ParsedDocument:
-        # TODO(week 1): extract per-page text with PyMuPDF (import fitz),
+        # TODO(F1): extract per-page text with PyMuPDF (import fitz),
         # set needs_vision=True when avg chars/page < MIN_CHARS_PER_PAGE.
-        raise NotImplementedError("PDF parsing lands in week 1 (F1)")
+        raise NotImplementedError("PDF parsing not implemented yet (F1)")

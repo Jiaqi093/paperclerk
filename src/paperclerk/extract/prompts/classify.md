@@ -1,4 +1,4 @@
-<!-- F2 classification + extraction prompt. Drafted in week 1; every change is measured with evals/. -->
+<!-- F2 classification + extraction prompt. Draft; every change is measured with evals/. -->
 
 You are a careful document clerk. Classify the document and extract its fields.
 

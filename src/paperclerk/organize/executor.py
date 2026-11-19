@@ -15,9 +15,9 @@ from paperclerk.organize.schemas import PlannedOp
 
 def apply(conn: sqlite3.Connection, ops: list[PlannedOp]) -> str:
     """Apply ops, return batch_id."""
-    raise NotImplementedError("Executor lands in week 2 (F4)")
+    raise NotImplementedError("Executor not implemented yet (F4)")
 
 
 def undo(conn: sqlite3.Connection, batch_id: str) -> int:
     """Reverse a batch. Returns number of ops undone."""
-    raise NotImplementedError("Undo lands in week 2 (F4)")
+    raise NotImplementedError("Undo not implemented yet (F4)")

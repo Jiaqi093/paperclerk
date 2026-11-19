@@ -24,6 +24,6 @@ class AnthropicClient:
         schema: type[T],
         images: list[bytes] | None = None,
     ) -> T:
-        # TODO(week 1): tool = {name, input_schema: schema.model_json_schema()},
+        # TODO(F2): tool = {name, input_schema: schema.model_json_schema()},
         # tool_choice forced, validate with schema.model_validate, retry once on ValidationError.
-        raise NotImplementedError("Anthropic client lands in week 1")
+        raise NotImplementedError("Anthropic client not implemented yet (F2)")

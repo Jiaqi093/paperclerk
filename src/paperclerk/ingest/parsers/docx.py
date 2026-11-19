@@ -9,5 +9,5 @@ class DocxParser:
     suffixes = frozenset({".docx"})
 
     def parse(self, path: Path) -> ParsedDocument:
-        # TODO(week 1): read paragraphs and tables with python-docx.
-        raise NotImplementedError("DOCX parsing lands in week 1 (F1)")
+        # TODO(F1): read paragraphs and tables with python-docx.
+        raise NotImplementedError("DOCX parsing not implemented yet (F1)")

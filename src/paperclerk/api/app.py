@@ -71,6 +71,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             failed=r.failed,
         )
 
-    # Planned: /api/bills, /api/subscriptions (week 3)
-    #          /api/plans, /api/plans/{id}/approve, /api/batches/{id}/undo (week 2–3)
+    # Planned: /api/bills, /api/subscriptions (F5)
+    #          /api/plans, /api/plans/{id}/approve, /api/batches/{id}/undo (F4)
     return app
