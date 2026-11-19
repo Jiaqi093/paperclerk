@@ -38,11 +38,13 @@ def upsert_document(
     pages: Sequence[Page] | None = None,
     source_ref: str | None = None,
     parse_status: str | None = None,
+    parse_error: str | None = None,
 ) -> tuple[int, bool]:
     """Insert a document for this content, or fill in fields on the existing one.
 
     Never changes an existing document's sha256, source or source_ref; None arguments leave
-    stored values alone (`pages=None` keeps the stored pages, a list replaces them). The row
+    stored values alone (`pages=None` keeps the stored pages, a list replaces them;
+    `parse_error` is replaced whenever `parse_status` is given, since it describes it). The row
     and its pages are written in one transaction. Returns (document_id, is_new).
     """
     with conn:
@@ -52,16 +54,17 @@ def upsert_document(
             conn.execute(
                 "UPDATE documents SET size_bytes = COALESCE(?, size_bytes), "
                 "mime_type = COALESCE(?, mime_type), "
+                "parse_error = CASE WHEN ? IS NULL THEN parse_error ELSE ? END, "
                 "parse_status = COALESCE(?, parse_status), updated_at = datetime('now') "
                 "WHERE id = ?",
-                (size_bytes, mime_type, parse_status, doc_id),
+                (size_bytes, mime_type, parse_status, parse_error, parse_status, doc_id),
             )
         else:
             cur = conn.execute(
                 "INSERT INTO documents "
-                "(sha256, source, source_ref, mime_type, size_bytes, parse_status) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (sha256, source, source_ref, mime_type, size_bytes, parse_status),
+                "(sha256, source, source_ref, mime_type, size_bytes, parse_status, parse_error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (sha256, source, source_ref, mime_type, size_bytes, parse_status, parse_error),
             )
             doc_id, is_new = int(cur.lastrowid), True
         if pages is not None:
@@ -76,13 +79,14 @@ def set_parse_result(
     pages: Sequence[Page] | None,
     mime_type: str | None,
     parse_status: str,
+    parse_error: str | None = None,
 ) -> None:
     """Record a new parse outcome; the document's pages become exactly `pages` (None: none)."""
     with conn:
         conn.execute(
             "UPDATE documents SET mime_type = COALESCE(?, mime_type), parse_status = ?, "
-            "updated_at = datetime('now') WHERE id = ?",
-            (mime_type, parse_status, document_id),
+            "parse_error = ?, updated_at = datetime('now') WHERE id = ?",
+            (mime_type, parse_status, parse_error, document_id),
         )
         _replace_pages(conn, document_id, pages or [])
 
@@ -156,7 +160,8 @@ def list_documents(conn: sqlite3.Connection, limit: int = 100) -> list[dict[str,
     """
     rows = conn.execute(
         "SELECT d.id, (SELECT MIN(p.path) FROM document_paths p WHERE p.document_id = d.id) "
-        "AS path, d.source, d.mime_type, d.size_bytes, d.created_at FROM documents d "
+        "AS path, d.source, d.mime_type, d.size_bytes, d.parse_status, d.parse_error, "
+        "d.created_at FROM documents d "
         "WHERE d.source != 'local' "
         "OR EXISTS (SELECT 1 FROM document_paths p WHERE p.document_id = d.id) "
         "ORDER BY d.id DESC LIMIT ?",

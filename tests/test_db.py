@@ -214,3 +214,16 @@ def test_too_old_sqlite_fails_with_a_clear_message(monkeypatch):
     monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 31, 1))
     with pytest.raises(RuntimeError, match="needs SQLite 3.35"):
         init_db(connect(":memory:"))
+
+
+def test_parse_error_follows_parse_status():
+    conn = _db()
+    doc, _ = repo.upsert_document(
+        conn, sha256="x", source="local", parse_status="failed", parse_error="password protected"
+    )
+    repo.upsert_document(conn, sha256="x", source="local")  # no outcome given: keep it
+    row = conn.execute("SELECT parse_status, parse_error FROM documents").fetchone()
+    assert tuple(row) == ("failed", "password protected")
+    repo.upsert_document(conn, sha256="x", source="local", parse_status="ok", pages=[Page("a")])
+    row = conn.execute("SELECT parse_status, parse_error FROM documents").fetchone()
+    assert tuple(row) == ("ok", None)

@@ -48,6 +48,9 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
            WHERE text IS NOT NULL OR parse_status = 'ok'""",
         "ALTER TABLE documents DROP COLUMN text",
     ),
+    # 4: why the last parse failed, in words a user can act on ("password protected"), so
+    #    the UI can show it. NULL unless parse_status is 'failed'.
+    ("ALTER TABLE documents ADD COLUMN parse_error TEXT",),
 )
 
 

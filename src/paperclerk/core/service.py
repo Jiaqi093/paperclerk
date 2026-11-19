@@ -11,7 +11,7 @@ from typing import Any
 
 from paperclerk.config import Settings
 from paperclerk.db import connect, init_db, repo
-from paperclerk.ingest.parsers import Page, parser_for
+from paperclerk.ingest.parsers import Page, ParseError, parser_for
 from paperclerk.ingest.scanner import (
     FileInfo,
     is_candidate,
@@ -42,6 +42,7 @@ class _Parsed:
     pages: tuple[Page, ...] | None
     mime_type: str | None
     status: str
+    error: str | None = None  # why parsing failed, for the user (status 'failed' only)
 
 
 class PaperClerk:
@@ -178,10 +179,14 @@ class PaperClerk:
             # A problem reading the file, not with its content.
             log.warning("can't read %s", info.path, exc_info=True)
             return _Parsed(None, None, _TRANSIENT)
+        except ParseError as e:
+            # A known problem with the content (e.g. password protected).
+            log.warning("can't parse %s: %s", info.path, e)
+            return _Parsed(None, None, repo.PARSE_FAILED, str(e))
         except Exception:
-            # Corrupt, encrypted or otherwise malformed: record it and keep going.
+            # Corrupt or otherwise malformed: record it and keep going.
             log.warning("failed to parse %s", info.path, exc_info=True)
-            return _Parsed(None, None, repo.PARSE_FAILED)
+            return _Parsed(None, None, repo.PARSE_FAILED, "damaged or unreadable file")
         return _Parsed(parsed.pages, parsed.mime_type, repo.PARSE_OK)
 
     @staticmethod
@@ -210,4 +215,9 @@ class PaperClerk:
 def _fields(parsed: _Parsed) -> dict[str, Any]:
     # A document's pages always match its parse outcome: no outcome but ok keeps old pages.
     pages = parsed.pages if parsed.status == repo.PARSE_OK else ()
-    return {"pages": pages, "mime_type": parsed.mime_type, "parse_status": parsed.status}
+    return {
+        "pages": pages,
+        "mime_type": parsed.mime_type,
+        "parse_status": parsed.status,
+        "parse_error": parsed.error,
+    }

@@ -29,10 +29,11 @@ made from numbers.
 Done in PR #2: incremental scan, content-hash identity, `document_paths`, error isolation,
 schema migrations.
 
-- [ ] PDF parser (PyMuPDF): text per page; under `MIN_CHARS_PER_PAGE` (30) chars per page on
-      average → `needs_vision`
+- [x] PDF parser (pypdfium2, not PyMuPDF: AGPL): text per page; a page with under
+      `MIN_CHARS_PER_PAGE` (30) chars, or mostly covered by images with little text, gets
+      `needs_vision`. Failure reasons ("password protected") stored in `parse_error`.
 - [ ] DOCX parser (python-docx): paragraphs and tables
-- [ ] Store per-page text and `needs_vision` _(new — parsers return them, the database drops
+- [x] Store per-page text and `needs_vision` _(new — parsers return them, the database drops
       them)_: a `document_pages (document_id, page_no, text)` table and a `needs_vision` column.
       F2 needs the flag to route scans to vision; F5 needs pages for chunking and page citations.
 - [ ] `parser_version` on documents, so content marked `failed` is retried after a parser fix

@@ -123,6 +123,8 @@ def test_one_broken_file_does_not_stop_the_scan(clerk, inbox, monkeypatch):
     r = clerk.scan()
     assert [p.rsplit("/", 1)[-1] for p in r.failed] == ["broken.txt"]
     assert r.new == 3  # note.txt and receipt.png are still indexed
+    errors = {d["path"].rsplit("/", 1)[-1]: d["parse_error"] for d in clerk.list_documents()}
+    assert errors["broken.txt"] == "damaged or unreadable file"
 
     assert clerk.scan().seen == 0  # not retried while the file is unchanged
     broken.write_text("garbage, fixed", encoding="utf-8")

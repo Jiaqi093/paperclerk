@@ -10,6 +10,8 @@ export type DocumentOut = {
   source: "local" | "gmail";
   mime_type: string | null;
   size_bytes: number | null;
+  parse_status: "ok" | "unsupported" | "failed" | null;
+  parse_error: string | null;
   created_at: string;
 };
 

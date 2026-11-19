@@ -6,7 +6,11 @@ from typing import Protocol
 
 from paperclerk.models import PAGE_SEPARATOR, Page
 
-__all__ = ["PAGE_SEPARATOR", "Page", "ParsedDocument", "Parser"]
+__all__ = ["PAGE_SEPARATOR", "Page", "ParseError", "ParsedDocument", "Parser"]
+
+
+class ParseError(Exception):
+    """The content can't be parsed, for a known reason. str(e) is shown to the user."""
 
 
 @dataclass(frozen=True)

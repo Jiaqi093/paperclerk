@@ -24,6 +24,8 @@ class DocumentOut(BaseModel):
     source: str
     mime_type: str | None
     size_bytes: int | None
+    parse_status: str | None  # ok / unsupported / failed; None = not parsed yet
+    parse_error: str | None  # why parsing failed, for the user
     created_at: str
 
 
