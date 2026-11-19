@@ -33,9 +33,22 @@ class ScanResult:
     removed: int = 0  # paths no longer on disk (their documents are kept)
     skipped: list[str] = field(default_factory=list)  # no parser implementation yet
     failed: list[str] = field(default_factory=list)  # couldn't read or parse (logged)
+    reasons: dict[str, str] = field(default_factory=dict)  # failed path -> why, for the user
     # Only in the cloud (not downloaded): left alone so the scan doesn't download them. Known
     # ones keep their documents; new ones are indexed once downloaded.
     cloud_only: list[str] = field(default_factory=list)
+
+    def fail(self, path: str, reason: str) -> None:
+        self.failed.append(path)
+        self.reasons.setdefault(path, reason)
+
+
+def _read_error(e: OSError) -> str:
+    if isinstance(e, _ChangedWhileReading):
+        return "changed while being read; retried next scan"
+    if isinstance(e, PermissionError):
+        return "permission denied"
+    return f"can't read ({e.strerror.lower()})" if e.strerror else "can't read"
 
 
 # Files larger than this are hashed (so duplicates are still found) but not parsed: they
@@ -53,6 +66,10 @@ def _outdated(known: sqlite3.Row, parser: Parser | None, info: FileInfo) -> bool
     if error.startswith(_TOO_LARGE_PREFIX) and info.size_bytes <= MAX_PARSE_BYTES:
         return True  # the size limit was raised since
     return (known["parser_version"] or 0) < parser.version
+
+
+class ScanInProgress(RuntimeError):
+    """Another scan of this PaperClerk is running; its result will include this one's work."""
 
 
 class _ChangedWhileReading(OSError):
@@ -111,6 +128,9 @@ class PaperClerk:
         # The API serves requests from a thread pool on this one connection, and sqlite3
         # connections aren't safe to use from several threads at once: serialize every access.
         self._db_lock = threading.RLock()
+        # One scan at a time. A scan takes the database lock per file, not for the whole scan,
+        # so the API keeps answering (the document list fills in) while a long scan runs.
+        self._scan_lock = threading.Lock()
 
     # ---- F1: ingest -------------------------------------------------------------------------
     def scan(self) -> ScanResult:
@@ -129,7 +149,15 @@ class PaperClerk:
         - One unreadable or malformed file never stops the scan. Files and folders that exist
           but can't be read are reported in `failed` and keep their paths (not treated as deleted).
         """
-        with self._db_lock, no_cloud_downloads():
+        if not self._scan_lock.acquire(blocking=False):
+            raise ScanInProgress("a scan is already running")
+        try:
+            return self._scan()
+        finally:
+            self._scan_lock.release()
+
+    def _scan(self) -> ScanResult:
+        with no_cloud_downloads():
             result = ScanResult()
             for root in self.settings.watched_folders:
                 if not root.is_dir():
@@ -140,28 +168,33 @@ class PaperClerk:
                 unreadable: list[Path] = []
                 for info in iter_candidate_files(root, unreadable):
                     present.add(str(info.path))
-                    try:
-                        self._scan_file(info, result)
-                    except sqlite3.Error:
-                        # e.g. "database is locked" while another process writes: skip this
-                        # file (retried next scan) rather than abandon the rest of the scan.
-                        self.conn.rollback()
-                        log.warning("database error on %s", info.path, exc_info=True)
-                        result.failed.append(str(info.path))
+                    with self._db_lock:
+                        try:
+                            self._scan_file(info, result)
+                        except sqlite3.Error:
+                            # e.g. "database is locked" while another process writes: skip
+                            # this file (retried next scan) rather than abandon the scan.
+                            self.conn.rollback()
+                            log.warning("database error on %s", info.path, exc_info=True)
+                            path = str(info.path)
+                            result.failed.append(path)
+                            # Replaces a parse reason recorded before the write failed.
+                            result.reasons[path] = "database busy; retried next scan"
                 for u in unreadable:
                     log.warning("can't read %s", u)
-                    result.failed.append(str(u))
+                    result.fail(str(u), "can't read (permission denied or unavailable)")
                 # Only forget paths this walk would have yielded, so a watched folder nested in a
                 # hidden folder of another watched folder doesn't lose its paths to that walk, and
                 # never paths the walk couldn't see into: unreadable isn't deleted.
-                gone = [
-                    p
-                    for p in repo.paths_under(self.conn, root)
-                    if p not in present
-                    and is_candidate(root, Path(p))
-                    and not any(Path(p).is_relative_to(u) for u in unreadable)
-                ]
-                result.removed += repo.delete_paths(self.conn, gone)
+                with self._db_lock:
+                    gone = [
+                        p
+                        for p in repo.paths_under(self.conn, root)
+                        if p not in present
+                        and is_candidate(root, Path(p))
+                        and not any(Path(p).is_relative_to(u) for u in unreadable)
+                    ]
+                    result.removed += repo.delete_paths(self.conn, gone)
             # Overlapping watched folders can report the same path twice.
             result.skipped = list(dict.fromkeys(result.skipped))
             result.failed = list(dict.fromkeys(result.failed))
@@ -200,7 +233,7 @@ class PaperClerk:
                 result.cloud_only.append(path)
                 return
             log.warning("can't read %s", info.path, exc_info=True)
-            result.failed.append(path)
+            result.fail(path, _read_error(e))
             return
 
         parsed: _Parsed | None = None
@@ -289,7 +322,7 @@ class PaperClerk:
         if parsed.status == repo.PARSE_UNSUPPORTED:
             result.skipped.append(path)
         elif parsed.status == repo.PARSE_FAILED:
-            result.failed.append(path)
+            result.fail(path, parsed.error or "couldn't parse")
 
     def list_documents(self, limit: int = 100) -> list[dict[str, Any]]:
         with self._db_lock:

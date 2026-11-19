@@ -105,5 +105,8 @@ def migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f"PRAGMA user_version = {version + 1}")
             conn.execute("COMMIT")
         except BaseException:
-            conn.execute("ROLLBACK")
+            # Don't let a failing ROLLBACK (e.g. SQLite already rolled back on an I/O error)
+            # hide the error that caused it.
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
             raise

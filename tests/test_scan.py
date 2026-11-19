@@ -570,3 +570,115 @@ def test_version_bump_with_copies_parses_the_shared_content_once(clerk, inbox, m
     r = clerk.scan()
     assert (r.seen, r.updated) == (1, 0)  # a.txt re-parses; b.txt and note.txt see v2
     assert clerk.scan().seen == 0
+
+
+def test_document_list_stays_readable_during_a_scan(clerk, inbox, monkeypatch):
+    import threading
+
+    from paperclerk.core import service
+
+    real_iter = service.iter_candidate_files
+    first_done, release = threading.Event(), threading.Event()
+
+    def slow_walk(root, unreadable=None):
+        for i, info in enumerate(real_iter(root, unreadable)):
+            if i == 1:
+                first_done.set()
+                release.wait(5)  # the scan is "busy" between files
+            yield info
+
+    monkeypatch.setattr(service, "iter_candidate_files", slow_walk)
+    scan = threading.Thread(target=clerk.scan)
+    scan.start()
+    try:
+        assert first_done.wait(5)
+        docs = []
+        reader = threading.Thread(target=lambda: docs.extend(clerk.list_documents()))
+        reader.start()
+        reader.join(2)
+        assert not reader.is_alive(), "list_documents waited for the whole scan"
+        assert len(docs) == 1  # what's indexed so far
+    finally:
+        release.set()
+        scan.join(5)
+    assert len(clerk.list_documents()) == 2
+
+
+def test_failed_files_come_with_a_reason(clerk, inbox, monkeypatch):
+    from pathlib import Path
+
+    def broken(self, data, path):
+        raise ValueError("malformed")
+
+    real_open = Path.open
+
+    def locked(self, mode="r", *args, **kwargs):
+        if self.name == "receipt.png" and mode == "rb":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_open(self, mode, *args, **kwargs)
+
+    sub = inbox / "private"
+    sub.mkdir()
+    sub.chmod(0)
+    monkeypatch.setattr(TextParser, "parse", broken)
+    monkeypatch.setattr(Path, "open", locked)
+    try:
+        r = clerk.scan()
+    finally:
+        sub.chmod(0o755)
+    reasons = {p.rsplit("/", 1)[-1]: why for p, why in r.reasons.items()}
+    assert reasons == {
+        "note.txt": "damaged or unreadable file",
+        "receipt.png": "permission denied",
+        "private": "can't read (permission denied or unavailable)",
+    }
+    assert sorted(reasons) == sorted(p.rsplit("/", 1)[-1] for p in r.failed)
+
+
+def test_a_second_scan_while_one_runs_is_refused(clerk, monkeypatch):
+    import threading
+
+    import pytest
+
+    from paperclerk.core import ScanInProgress, service
+
+    real_iter = service.iter_candidate_files
+    started, release = threading.Event(), threading.Event()
+
+    def slow_walk(root, unreadable=None):
+        started.set()
+        release.wait(5)
+        yield from real_iter(root, unreadable)
+
+    monkeypatch.setattr(service, "iter_candidate_files", slow_walk)
+    first = threading.Thread(target=clerk.scan)
+    first.start()
+    try:
+        assert started.wait(5)
+        with pytest.raises(ScanInProgress):
+            clerk.scan()
+    finally:
+        release.set()
+        first.join(5)
+    monkeypatch.undo()
+    assert clerk.scan().seen == 0  # the lock was released
+
+
+def test_database_error_after_a_parse_failure_reports_the_database(clerk, monkeypatch):
+    import sqlite3
+
+    def broken(self, data, path):
+        raise ValueError("malformed")
+
+    real_upsert = repo.upsert_document
+
+    def busy(conn, **kwargs):
+        if kwargs.get("parse_status") == "failed":
+            raise sqlite3.OperationalError("database is locked")
+        return real_upsert(conn, **kwargs)
+
+    monkeypatch.setattr(TextParser, "parse", broken)
+    monkeypatch.setattr(repo, "upsert_document", busy)
+    r = clerk.scan()
+    reasons = {p.rsplit("/", 1)[-1]: why for p, why in r.reasons.items()}
+    assert reasons == {"note.txt": "database busy; retried next scan"}

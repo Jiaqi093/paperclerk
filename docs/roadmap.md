@@ -45,9 +45,10 @@ schema migrations.
 - [x] Cloud-only files (iCloud "Optimize Mac Storage", Dropbox, OneDrive: macOS
       `SF_DATALESS`) are never read, so scans don't download them; reported in
       `cloud_only`, known ones keep their paths. Not yet tested on a real sync folder.
-- [ ] Small fixes from the PR #2 review: `paths_under` as a range query instead of a full table
-      scan; show `removed` in the web UI; clearer label than "failed to parse"; guard migrate's
-      `ROLLBACK` with `in_transaction`; don't re-report empty unreadable folders on every scan
+- [x] Small fixes from the PR #2 review: `paths_under` as a range query; web shows removed,
+      cloud-only and failure reasons, plus a status column; migrate's `ROLLBACK` guarded; the
+      scan takes the database lock per file, so the API stays responsive during a scan.
+      (Unreadable folders are still reported on every scan, on purpose.)
 
 **Done when:** a real folder mixing text PDFs, scanned PDFs, DOCX and images scans cleanly; every
 document has text or `needs_vision`; encrypted and corrupt files have tests.

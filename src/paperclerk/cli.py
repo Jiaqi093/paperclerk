@@ -34,7 +34,7 @@ def scan(config: Path = ConfigOpt) -> None:
         f"skipped={len(r.skipped)} failed={len(r.failed)} cloud_only={len(r.cloud_only)}"
     )
     for path in r.failed:
-        typer.echo(f"  failed: {path}", err=True)
+        typer.echo(f"  failed: {path} ({r.reasons.get(path, 'unknown')})", err=True)
 
 
 @app.command()

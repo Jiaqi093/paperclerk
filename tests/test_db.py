@@ -50,12 +50,13 @@ def test_a_path_points_at_one_document_and_documents_keep_their_content():
 def test_paths_under_is_by_path_component_not_string_prefix():
     conn = _db()
     doc, _ = repo.upsert_document(conn, sha256="x", source="local")
-    for p in ("/a/keep.txt", "/a/sub/b.txt", "/ab/other.txt"):
+    for p in ("/a/keep.txt", "/a/sub/b.txt", "/ab/other.txt", "/a-b/x.txt", "/a0/y.txt", "/a"):
         repo.set_path(conn, p, doc, mtime=1.0, size_bytes=1)
     assert sorted(repo.paths_under(conn, Path("/a"))) == ["/a/keep.txt", "/a/sub/b.txt"]
+    assert len(repo.paths_under(conn, Path("/"))) == 6
     assert repo.delete_paths(conn, ["/a/keep.txt"]) == 1
     left = {r[0] for r in conn.execute("SELECT path FROM document_paths")}
-    assert left == {"/a/sub/b.txt", "/ab/other.txt"}
+    assert left == {"/a/sub/b.txt", "/ab/other.txt", "/a-b/x.txt", "/a0/y.txt", "/a"}
 
 
 def _old_db(path):
@@ -245,3 +246,14 @@ def test_no_cloud_downloads_sets_and_restores_the_thread_policy():
     with scanner.no_cloud_downloads():
         assert libc.getiopolicy_np(*policy) == scanner._IOPOL_MATERIALIZE_DATALESS_FILES_OFF
     assert libc.getiopolicy_np(*policy) == before
+
+
+def test_paths_under_with_unusual_names_and_trailing_slash():
+    conn = _db()
+    doc, _ = repo.upsert_document(conn, sha256="x", source="local")
+    inside = ["/My Bills/a.txt", "/My Bills/é/账单 2026.pdf", "/My Bills/!x/y.txt"]
+    outside = ["/My Bills!/z.txt", "/My Bills-old/z.txt", "/My Bills.bak/z.txt", "/My Billsé/z"]
+    for p in inside + outside:
+        repo.set_path(conn, p, doc, mtime=1.0, size_bytes=1)
+    for root in ("/My Bills", "/My Bills/"):
+        assert sorted(repo.paths_under(conn, Path(root))) == sorted(inside)

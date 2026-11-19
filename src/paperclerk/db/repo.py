@@ -167,11 +167,17 @@ def set_path(
 
 
 def paths_under(conn: sqlite3.Connection, root: Path) -> list[str]:
-    return [
-        r["path"]
-        for r in conn.execute("SELECT path FROM document_paths")
-        if Path(r["path"]).is_relative_to(root)
-    ]
+    """Paths inside `root` (by path component: /a holds /a/b, not /ab/c).
+
+    A range on the primary key: every string starting with "<root>/" sorts between it and
+    "<root>0" ("0" is the character after "/"), so this doesn't read the whole table.
+    """
+    prefix = str(root).rstrip("/") + "/"
+    rows = conn.execute(
+        "SELECT path FROM document_paths WHERE path >= ? AND path < ?",
+        (prefix, prefix[:-1] + "0"),
+    )
+    return [r["path"] for r in rows if Path(r["path"]).is_relative_to(root)]
 
 
 def delete_paths(conn: sqlite3.Connection, paths: list[str]) -> int:
@@ -190,7 +196,8 @@ def list_documents(conn: sqlite3.Connection, limit: int = 100) -> list[dict[str,
     rows = conn.execute(
         "SELECT d.id, (SELECT MIN(p.path) FROM document_paths p WHERE p.document_id = d.id) "
         "AS path, d.source, d.mime_type, d.size_bytes, d.parse_status, d.parse_error, "
-        "d.created_at FROM documents d "
+        "EXISTS (SELECT 1 FROM document_pages g WHERE g.document_id = d.id AND g.needs_vision) "
+        "AS needs_vision, d.created_at FROM documents d "
         "WHERE d.source != 'local' "
         "OR EXISTS (SELECT 1 FROM document_paths p WHERE p.document_id = d.id) "
         "ORDER BY d.id DESC LIMIT ?",
