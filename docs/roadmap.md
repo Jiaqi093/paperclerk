@@ -53,7 +53,12 @@ schema migrations.
 Real-folder check (2026-11-20, 40 real bills: energy, water, internet, insurance, tickets):
 all parsed, no failures, rescan does no work. It found two bugs, fixed in PdfParser v2: a nearly
 empty last page was flagged for vision, and PDFium's U+FFFE hyphen marker leaked into text.
-That folder had only text PDFs, so scanned PDFs, DOCX and images still need a real check.
+A second check on all of ~/Documents (114 files: 94 PDF, 3 DOCX, 4 JPG, 13 Markdown; only
+statistics looked at, no file names or text): all parsed, no failures; 3 exact copies merged.
+6 scanned PDFs and 1 mixed one were flagged; one PDF had its text drawn as vector outlines
+with no text layer, and only 1 of its 6 pages was flagged. PdfParser v3 finds outlines by
+rendering the page small and counting lines of ink (all 6 flagged now). DOCX and images parsed,
+but their text quality wasn't inspected (privacy).
 
 **Done when:** a real folder mixing text PDFs, scanned PDFs, DOCX and images scans cleanly; every
 document has text or `needs_vision`; encrypted and corrupt files have tests.

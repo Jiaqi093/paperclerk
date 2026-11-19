@@ -102,7 +102,7 @@ project, including a hosted demo, under AGPL terms, contradicting the MIT licens
 detection, rendering pages to images for F2) under a license compatible with MIT.
 
 **Scan detection is per page:** a page needs vision when it has under 30 visible
-characters and something to look at (pictures covering at least 5% of it, or 200+ vector
-shapes: text converted to outlines), or when images cover at least half of it and it has at most 200 characters (a phone
+characters and something to look at (pictures covering at least 5% of it, or text converted
+to vector outlines: 20+ shapes and 10+ lines of ink when rendered small), or when images cover at least half of it and it has at most 200 characters (a phone
 scan with a stamped line of text). A nearly empty page (a heading in a frame) isn't sent. Mixed PDFs then send only their scanned pages as images. Thresholds
 are starting points to tune on the F6 eval set.

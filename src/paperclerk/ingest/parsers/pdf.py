@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import itertools
 import logging
 import threading
@@ -13,13 +14,20 @@ from paperclerk.ingest.parsers.base import Page, ParsedDocument, ParseError
 
 log = logging.getLogger(__name__)
 
-# A page with fewer visible characters than this has no usable text layer. It's a scan if
-# something else is drawn on it: a picture covering at least MIN_IMAGE_COVERAGE of it, or
-# many vector shapes (text converted to outlines). A nearly empty page, e.g. one heading and
-# a frame, isn't worth a vision call.
+# A page with fewer visible characters than this has no usable text layer. It needs vision
+# if something else is drawn on it: a picture covering at least MIN_IMAGE_COVERAGE of it, or
+# text converted to vector outlines (some generators do this). Outlines are recognised by
+# rendering the page small and counting lines of ink; one path can hold a whole line of
+# text, so counting paths alone misses them. A nearly empty page, e.g. one heading in a
+# frame, isn't worth a vision call.
 MIN_CHARS_PER_PAGE = 30
 MIN_IMAGE_COVERAGE = 0.05  # a card-sized scan on A4 covers ~7.5%
-MIN_VECTOR_PATHS = 200
+MIN_VECTOR_PATHS = 20  # fewer shapes than this (a frame, a rule) can't be a page of text
+MIN_INK_LINES = 10
+INK_ROW_SHARE = 0.02  # share of a pixel row that must be ink for it to be part of a line
+_INK_SCALE = 0.5  # 72 dpi * 0.5: an A4 page renders to about 300x420 pixels
+_INK_MAX_PIXELS = 1000  # longest side of the render, so huge pages (A0 plans) stay cheap
+_INK_CONTRAST = 40  # grey levels from the background that count as ink (antialiased strokes)
 # A page mostly covered by images with only a little text is a scan too, e.g. a phone scan
 # whose app stamped one line of text on top ("Scanned by CamScanner 2026-10-24 10:31").
 # Starting points; tune them on the F6 eval set.
@@ -41,7 +49,9 @@ class PdfParser:
     """
 
     suffixes = frozenset({".pdf"})
-    version = 2  # 2: nearly empty pages aren't sent to vision; U+FFFE read as "-"
+    # 2: nearly empty pages aren't sent to vision; U+FFFE read as "-"
+    # 3: text drawn as outlines found by lines of ink, not by counting paths
+    version = 3
 
     def parse(self, data: bytes, path: Path) -> ParsedDocument:
         with _pdfium_lock:
@@ -90,8 +100,52 @@ def _looks_scanned(page: pdfium.PdfPage, text: str) -> bool:
         if _image_coverage(page) >= MIN_IMAGE_COVERAGE:
             return True
         paths = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_PATH], max_depth=MAX_FORM_DEPTH)
-        return sum(1 for _ in itertools.islice(paths, MIN_VECTOR_PATHS)) >= MIN_VECTOR_PATHS
+        if sum(1 for _ in itertools.islice(paths, MIN_VECTOR_PATHS)) < MIN_VECTOR_PATHS:
+            return False
+        return _ink_lines(page) >= MIN_INK_LINES
     return chars <= MAX_CHARS_ON_IMAGE_PAGE and _image_coverage(page) >= IMAGE_COVERAGE
+
+
+def _ink_lines(page: pdfium.PdfPage) -> int:
+    """Roughly how many lines of text are drawn on the page, from a small grayscale render.
+
+    Ink is any pixel clearly different from the page background (the most common shade), so
+    grey text, thin antialiased strokes and light-on-dark pages all count. A row is part of a
+    line when INK_ROW_SHARE of it is ink, so a frame or a rule running down the page doesn't
+    merge every line into one. Bands are counted across rows and across columns and the larger
+    count wins, so text drawn sideways (a rotated page) is found too.
+    """
+    width_pt, height_pt = page.get_size()
+    scale = min(_INK_SCALE, _INK_MAX_PIXELS / max(width_pt, height_pt, 1))
+    bitmap = page.render(scale=scale, grayscale=True)
+    try:
+        buf, width, height, stride = (
+            bytes(bitmap.buffer),
+            bitmap.width,
+            bitmap.height,
+            bitmap.stride,
+        )
+    finally:
+        bitmap.close()
+    if not width or not height:
+        return 0
+    background = collections.Counter(buf[: stride * height]).most_common(1)[0][0]
+    is_ink = bytes(1 if abs(v - background) > _INK_CONTRAST else 0 for v in range(256))
+    ink = buf.translate(is_ink)  # 1 per ink pixel, same layout as the bitmap
+    row_ink = [sum(ink[y * stride : y * stride + width]) for y in range(height)]
+    col_ink = [sum(ink[x : stride * height : stride]) for x in range(width)]
+    return max(_bands(row_ink, width), _bands(col_ink, height))
+
+
+def _bands(ink_per_line: list[int], length: int) -> int:
+    threshold = max(1, int(length * INK_ROW_SHARE))
+    bands, inside = 0, False
+    for n in ink_per_line:
+        dark = n >= threshold
+        if dark and not inside:
+            bands += 1
+        inside = dark
+    return bands
 
 
 def _image_coverage(page: pdfium.PdfPage) -> float:

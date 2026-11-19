@@ -65,15 +65,56 @@ def test_nearly_empty_page_is_not_sent_to_vision(tmp_path):
     assert _parse(_pdf(tmp_path / "blank.pdf", [{}])).pages == (Page(""),)
 
 
-def test_text_drawn_as_outlines_is_flagged_for_vision(tmp_path):
-    # Some generators convert text to vector shapes: no text layer, but plenty to read.
-    path = tmp_path / "outlined.pdf"
+def _outlined(
+    path: Path,
+    lines: int,
+    frame: bool = False,
+    grey: float = 0.0,
+    stem: float = 0.9,
+    rotate: int = 0,
+    inverted: bool = False,
+) -> Path:
+    """A page of 10 pt text drawn as shapes, one path per line, as some generators do: each
+    glyph is a thin vertical stem (`stem` points wide), grey level `grey` (0 = black)."""
     c = canvas.Canvas(str(path), pagesize=A4)
-    for i in range(300):
-        c.rect(40 + (i % 30) * 17, 700 - (i // 30) * 20, 10, 12, fill=1)
+    if rotate:
+        c.setPageRotation(rotate)
+    if inverted:
+        c.setFillGray(0)
+        c.rect(0, 0, W, H, stroke=0, fill=1)
+    if frame:
+        c.rect(30, 30, W - 60, H - 60)
+    c.setFillGray(1 - grey if inverted else grey)
+    for i in range(lines):
+        p = c.beginPath()
+        for g in range(60):
+            p.rect(60 + g * 7, H - 80 - i * 16, stem, 7)
+        c.drawPath(p, stroke=0, fill=1)
     c.showPage()
     c.save()
-    assert _parse(path).needs_vision
+    return path
+
+
+def test_text_drawn_as_outlines_is_flagged_for_vision(tmp_path):
+    # Seen in a real document: 40-60 lines per page, under 200 shapes, no text layer.
+    assert _parse(_outlined(tmp_path / "a.pdf", lines=40)).needs_vision
+    # A frame down the page edges must not merge the lines into one.
+    assert _parse(_outlined(tmp_path / "b.pdf", lines=40, frame=True)).needs_vision
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [{"grey": 0.6}, {"stem": 0.5}, {"rotate": 90}, {"inverted": True}],
+    ids=["light-grey", "thin-strokes", "sideways", "white-on-black"],
+)
+def test_outlined_text_is_found_in_harder_cases(tmp_path, variant):
+    pdf = _outlined(tmp_path / "x.pdf", lines=30, **variant)
+    with_rules = _parse(pdf)
+    assert with_rules.needs_vision, variant
+
+
+def test_a_few_shapes_are_not_a_page_of_text(tmp_path):
+    assert not _parse(_outlined(tmp_path / "rules.pdf", lines=3)).needs_vision
 
 
 def test_photo_with_a_stamped_line_is_a_scan_but_only_that_page(tmp_path):
