@@ -3,7 +3,7 @@ from __future__ import annotations
 import mimetypes
 from pathlib import Path
 
-from paperclerk.ingest.parsers.base import ParsedDocument
+from paperclerk.ingest.parsers.base import Page, ParsedDocument
 
 
 class ImageParser:
@@ -13,4 +13,4 @@ class ImageParser:
 
     def parse(self, path: Path) -> ParsedDocument:
         mime = mimetypes.guess_type(path.name)[0] or "image/png"
-        return ParsedDocument(text="", mime_type=mime, pages=[], needs_vision=True)
+        return ParsedDocument(mime_type=mime, pages=(Page("", needs_vision=True),))

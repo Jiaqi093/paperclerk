@@ -1,5 +1,6 @@
 import os
 
+from paperclerk.db import repo
 from paperclerk.ingest.parsers.text import TextParser
 
 
@@ -29,14 +30,13 @@ def _bump_mtime(path, by=10):
 
 
 def _texts(clerk):
-    return [r[0] for r in clerk.conn.execute("SELECT text FROM documents ORDER BY id")]
+    ids = [r[0] for r in clerk.conn.execute("SELECT id FROM documents ORDER BY id")]
+    return [repo.document_text(clerk.conn, i) for i in ids]
 
 
 def _path_texts(clerk):
-    rows = clerk.conn.execute(
-        "SELECT p.path, d.text FROM document_paths p JOIN documents d ON d.id = p.document_id"
-    )
-    return {r[0].rsplit("/", 1)[-1]: r[1] for r in rows}
+    rows = clerk.conn.execute("SELECT path, document_id FROM document_paths")
+    return {r[0].rsplit("/", 1)[-1]: repo.document_text(clerk.conn, r[1]) for r in rows}
 
 
 def test_new_content_at_same_path_is_a_new_document_and_old_text_is_kept(clerk, inbox):
@@ -257,3 +257,54 @@ def test_symlink_loop_is_ignored_quietly(clerk, inbox):
     (inbox / "loop.txt").symlink_to(inbox / "loop.txt")
     r = clerk.scan()
     assert (r.new, r.failed) == (2, [])
+
+
+def _pages_of(clerk, name):
+    doc_id = next(
+        r[1]
+        for r in clerk.conn.execute("SELECT path, document_id FROM document_paths")
+        if r[0].endswith("/" + name)
+    )
+    return repo.get_pages(clerk.conn, doc_id)
+
+
+def test_scan_stores_pages_and_flags_images_for_vision(clerk):
+    from paperclerk.ingest.parsers import Page
+
+    clerk.scan()
+    assert _pages_of(clerk, "note.txt") == [Page("Electricity bill due 24 Oct, $214.37")]
+    assert _pages_of(clerk, "receipt.png") == [Page("", needs_vision=True)]
+
+
+def test_reparse_replaces_pages_instead_of_appending(clerk, inbox, monkeypatch):
+    from paperclerk.ingest.parsers import Page, ParsedDocument
+
+    clerk.scan()
+    two_pages = ParsedDocument("text/plain", (Page("page one"), Page("page two")))
+    monkeypatch.setattr(TextParser, "parse", lambda self, path: two_pages)
+    note = inbox / "note.txt"
+    note.write_text("changed", encoding="utf-8")
+    _bump_mtime(note)
+    clerk.scan()
+    assert _pages_of(clerk, "note.txt") == [Page("page one"), Page("page two")]
+    assert _path_texts(clerk)["note.txt"] == "page one\n\npage two"
+
+
+def test_failed_reparse_clears_old_pages(clerk, inbox, monkeypatch):
+    clerk.scan()
+    doc_id = clerk.conn.execute(
+        "SELECT document_id FROM document_paths WHERE path LIKE '%note.txt'"
+    ).fetchone()[0]
+    # A document from before parse_status existed: old text, outcome never recorded.
+    clerk.conn.execute("UPDATE documents SET parse_status = NULL WHERE id = ?", (doc_id,))
+    clerk.conn.execute("DELETE FROM document_paths WHERE document_id = ?", (doc_id,))
+    clerk.conn.commit()
+
+    def broken(self, path):
+        raise ValueError("malformed")
+
+    monkeypatch.setattr(TextParser, "parse", broken)
+    clerk.scan()  # same content seen again, now unparseable
+    row = clerk.conn.execute("SELECT parse_status FROM documents WHERE id = ?", (doc_id,))
+    assert row.fetchone()[0] == "failed"
+    assert repo.get_pages(clerk.conn, doc_id) == []  # no stale text next to "failed"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from paperclerk.ingest.parsers.base import ParsedDocument
+from paperclerk.ingest.parsers.base import Page, ParsedDocument
 
 
 class TextParser:
@@ -10,4 +10,4 @@ class TextParser:
 
     def parse(self, path: Path) -> ParsedDocument:
         text = path.read_text(encoding="utf-8", errors="replace")
-        return ParsedDocument(text=text, mime_type="text/plain", pages=[text])
+        return ParsedDocument(mime_type="text/plain", pages=(Page(text),))

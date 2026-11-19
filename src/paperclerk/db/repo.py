@@ -1,16 +1,20 @@
 """Small data-access helpers. Keep SQL here, not in business logic.
 
-Model: a *document* is one unique content (sha256) and never changes identity; its text and
-parse outcome belong to that content. *document_paths* records where each content currently
-sits on disk: one document can have many paths (copies), a path holds exactly one document,
-and when a file's content changes its path simply points at a different document.
+Model: a *document* is one unique content (sha256) and never changes identity; its pages
+(text per page, in document_pages) and parse outcome belong to that content. *document_paths*
+records where each content currently sits on disk: one document can have many paths (copies),
+a path holds exactly one document, and when a file's content changes its path simply points
+at a different document.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+
+from paperclerk.models import PAGE_SEPARATOR, Page
 
 # documents.parse_status values. NULL (rows from before migration 1) is treated as not parsed.
 PARSE_OK = "ok"
@@ -31,50 +35,80 @@ def upsert_document(
     source: str,
     mime_type: str | None = None,
     size_bytes: int | None = None,
-    text: str | None = None,
+    pages: Sequence[Page] | None = None,
     source_ref: str | None = None,
     parse_status: str | None = None,
 ) -> tuple[int, bool]:
     """Insert a document for this content, or fill in fields on the existing one.
 
-    Never changes an existing document's sha256, source or source_ref; NULL arguments leave
-    stored values alone. Returns (document_id, is_new).
+    Never changes an existing document's sha256, source or source_ref; None arguments leave
+    stored values alone (`pages=None` keeps the stored pages, a list replaces them). The row
+    and its pages are written in one transaction. Returns (document_id, is_new).
     """
-    row = get_document_by_sha(conn, sha256)
-    if row is not None:
-        conn.execute(
-            "UPDATE documents SET size_bytes = COALESCE(?, size_bytes), "
-            "mime_type = COALESCE(?, mime_type), text = COALESCE(?, text), "
-            "parse_status = COALESCE(?, parse_status), updated_at = datetime('now') "
-            "WHERE id = ?",
-            (size_bytes, mime_type, text, parse_status, row["id"]),
-        )
-        conn.commit()
-        return row["id"], False
-    cur = conn.execute(
-        "INSERT INTO documents "
-        "(sha256, source, source_ref, mime_type, size_bytes, text, parse_status) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (sha256, source, source_ref, mime_type, size_bytes, text, parse_status),
-    )
-    conn.commit()
-    return int(cur.lastrowid), True
+    with conn:
+        row = get_document_by_sha(conn, sha256)
+        if row is not None:
+            doc_id, is_new = row["id"], False
+            conn.execute(
+                "UPDATE documents SET size_bytes = COALESCE(?, size_bytes), "
+                "mime_type = COALESCE(?, mime_type), "
+                "parse_status = COALESCE(?, parse_status), updated_at = datetime('now') "
+                "WHERE id = ?",
+                (size_bytes, mime_type, parse_status, doc_id),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO documents "
+                "(sha256, source, source_ref, mime_type, size_bytes, parse_status) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (sha256, source, source_ref, mime_type, size_bytes, parse_status),
+            )
+            doc_id, is_new = int(cur.lastrowid), True
+        if pages is not None:
+            _replace_pages(conn, doc_id, pages)
+    return doc_id, is_new
 
 
 def set_parse_result(
     conn: sqlite3.Connection,
     document_id: int,
     *,
-    text: str | None,
+    pages: Sequence[Page] | None,
     mime_type: str | None,
     parse_status: str,
 ) -> None:
-    conn.execute(
-        "UPDATE documents SET text = ?, mime_type = COALESCE(?, mime_type), parse_status = ?, "
-        "updated_at = datetime('now') WHERE id = ?",
-        (text, mime_type, parse_status, document_id),
+    """Record a new parse outcome; the document's pages become exactly `pages` (None: none)."""
+    with conn:
+        conn.execute(
+            "UPDATE documents SET mime_type = COALESCE(?, mime_type), parse_status = ?, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (mime_type, parse_status, document_id),
+        )
+        _replace_pages(conn, document_id, pages or [])
+
+
+def _replace_pages(conn: sqlite3.Connection, document_id: int, pages: Sequence[Page]) -> None:
+    # No commit: callers wrap this and the documents row in one transaction.
+    conn.execute("DELETE FROM document_pages WHERE document_id = ?", (document_id,))
+    conn.executemany(
+        "INSERT INTO document_pages (document_id, page_no, text, needs_vision) VALUES (?, ?, ?, ?)",
+        [(document_id, i, p.text, int(p.needs_vision)) for i, p in enumerate(pages, start=1)],
     )
-    conn.commit()
+
+
+def get_pages(conn: sqlite3.Connection, document_id: int) -> list[Page]:
+    """A document's pages in order (pages[0] is page 1); empty if it has no text."""
+    rows = conn.execute(
+        "SELECT text, needs_vision FROM document_pages WHERE document_id = ? ORDER BY page_no",
+        (document_id,),
+    )
+    return [Page(r["text"], bool(r["needs_vision"])) for r in rows]
+
+
+def document_text(conn: sqlite3.Connection, document_id: int) -> str | None:
+    """A document's full text (its pages joined), or None if it has no pages."""
+    pages = get_pages(conn, document_id)
+    return PAGE_SEPARATOR.join(p.text for p in pages) if pages else None
 
 
 def get_path(conn: sqlite3.Connection, path: str) -> sqlite3.Row | None:

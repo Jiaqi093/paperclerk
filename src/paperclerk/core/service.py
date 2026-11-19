@@ -11,7 +11,7 @@ from typing import Any
 
 from paperclerk.config import Settings
 from paperclerk.db import connect, init_db, repo
-from paperclerk.ingest.parsers import parser_for
+from paperclerk.ingest.parsers import Page, parser_for
 from paperclerk.ingest.scanner import (
     FileInfo,
     is_candidate,
@@ -39,7 +39,7 @@ _TRANSIENT = "transient"
 
 @dataclass(frozen=True)
 class _Parsed:
-    text: str | None
+    pages: tuple[Page, ...] | None
     mime_type: str | None
     status: str
 
@@ -58,10 +58,10 @@ class PaperClerk:
         """Bring the index in line with the watched folders.
 
         - Unchanged files (same mtime and size) cost nothing, except content whose type had no
-          parser yet: that is re-parsed so it gets text once F1 lands (and re-hashed before
+          parser yet: that is re-parsed so it gets pages once F1 lands (and re-hashed before
           the result is stored, since an unchanged mtime and size don't prove unchanged bytes).
         - New or changed files are hashed. Known content is never parsed twice; a path whose
-          content changed points at the new document, and the old document keeps its text.
+          content changed points at the new document, and the old document keeps its pages.
         - Content that failed to parse is retried only when the file changes.
         - One unreadable or malformed file never stops the scan. Files and folders that exist
           but can't be read are reported in `failed` and keep their paths (not treated as deleted).
@@ -182,7 +182,7 @@ class PaperClerk:
             # Corrupt, encrypted or otherwise malformed: record it and keep going.
             log.warning("failed to parse %s", info.path, exc_info=True)
             return _Parsed(None, None, repo.PARSE_FAILED)
-        return _Parsed(parsed.text, parsed.mime_type, repo.PARSE_OK)
+        return _Parsed(parsed.pages, parsed.mime_type, repo.PARSE_OK)
 
     @staticmethod
     def _record_outcome(path: str, parsed: _Parsed, result: ScanResult) -> None:
@@ -208,4 +208,6 @@ class PaperClerk:
 
 
 def _fields(parsed: _Parsed) -> dict[str, Any]:
-    return {"text": parsed.text, "mime_type": parsed.mime_type, "parse_status": parsed.status}
+    # A document's pages always match its parse outcome: no outcome but ok keeps old pages.
+    pages = parsed.pages if parsed.status == repo.PARSE_OK else ()
+    return {"pages": pages, "mime_type": parsed.mime_type, "parse_status": parsed.status}

@@ -1,18 +1,28 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from paperclerk.models import PAGE_SEPARATOR, Page
 
-@dataclass
+__all__ = ["PAGE_SEPARATOR", "Page", "ParsedDocument", "Parser"]
+
+
+@dataclass(frozen=True)
 class ParsedDocument:
-    text: str
     mime_type: str
-    # Page-level text (1-based page = index + 1) so answers can cite pages.
-    pages: list[str] = field(default_factory=list)
-    # True when there is little or no text layer (scans, photos): send to a vision model.
-    needs_vision: bool = False
+    # In order: pages[0] is page 1, so answers can cite pages. Formats without fixed pages
+    # (plain text, DOCX, images) are one page.
+    pages: tuple[Page, ...]
+
+    @property
+    def text(self) -> str:
+        return PAGE_SEPARATOR.join(p.text for p in self.pages)
+
+    @property
+    def needs_vision(self) -> bool:
+        return any(p.needs_vision for p in self.pages)
 
 
 class Parser(Protocol):
