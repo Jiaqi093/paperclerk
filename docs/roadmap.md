@@ -32,7 +32,9 @@ schema migrations.
 - [x] PDF parser (pypdfium2, not PyMuPDF: AGPL): text per page; a page with under
       `MIN_CHARS_PER_PAGE` (30) chars, or mostly covered by images with little text, gets
       `needs_vision`. Failure reasons ("password protected") stored in `parse_error`.
-- [ ] DOCX parser (python-docx): paragraphs and tables
+- [x] DOCX parser (python-docx, reading the XML): paragraphs, tables as Markdown, headers and
+      footers, text boxes; tracked deletions and comments skipped; one page. A body with an
+      image and little text gets `needs_vision`. Old `.doc` stays unsupported.
 - [x] Store per-page text and `needs_vision` _(new — parsers return them, the database drops
       them)_: a `document_pages (document_id, page_no, text)` table and a `needs_vision` column.
       F2 needs the flag to route scans to vision; F5 needs pages for chunking and page citations.
@@ -72,6 +74,8 @@ first real numbers.
 - [ ] `AnthropicClient.structured()`: forced tool call, Pydantic validation, one retry on failure
 - [ ] Classification prompt (`src/paperclerk/extract/prompts/classify.md`); `needs_vision` documents and images go
       through vision
+- [ ] Vision input per type: PDF pages flagged `needs_vision` rendered to images (pypdfium2);
+      images as-is; DOCX can't be rendered without LibreOffice, so send its embedded pictures
 - [ ] Results in `extractions`; low confidence goes to the review queue
 - [ ] Review queue in the web UI: confirm or correct fields; corrected rows marked
       `human_verified`
