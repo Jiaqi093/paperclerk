@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import logging
 import threading
 from collections.abc import Iterator
@@ -12,8 +13,13 @@ from paperclerk.ingest.parsers.base import Page, ParsedDocument, ParseError
 
 log = logging.getLogger(__name__)
 
-# A page with fewer visible characters than this has no usable text layer: a scan.
+# A page with fewer visible characters than this has no usable text layer. It's a scan if
+# something else is drawn on it: a picture covering at least MIN_IMAGE_COVERAGE of it, or
+# many vector shapes (text converted to outlines). A nearly empty page, e.g. one heading and
+# a frame, isn't worth a vision call.
 MIN_CHARS_PER_PAGE = 30
+MIN_IMAGE_COVERAGE = 0.05  # a card-sized scan on A4 covers ~7.5%
+MIN_VECTOR_PATHS = 200
 # A page mostly covered by images with only a little text is a scan too, e.g. a phone scan
 # whose app stamped one line of text on top ("Scanned by CamScanner 2026-10-24 10:31").
 # Starting points; tune them on the F6 eval set.
@@ -35,7 +41,7 @@ class PdfParser:
     """
 
     suffixes = frozenset({".pdf"})
-    version = 1
+    version = 2  # 2: nearly empty pages aren't sent to vision; U+FFFE read as "-"
 
     def parse(self, data: bytes, path: Path) -> ParsedDocument:
         with _pdfium_lock:
@@ -69,6 +75,10 @@ def _read_page(page: pdfium.PdfPage) -> Page:
         # All text on the page, not only what lies inside its box: some producers put content
         # outside it. PDFium ends lines with \r\n; keep \n only.
         text = textpage.get_text_range().replace("\r\n", "\n").replace("\r", "\n").strip()
+        # PDFium joins a word hyphenated across a line break into one, marking the hyphen as
+        # U+FFFE ("Carrier-Imposed", but also "inter-national"). Keep it as "-": right for
+        # compounds; split words stay readable to a model, though not to exact search.
+        text = text.replace("\ufffe", "-")
     finally:
         textpage.close()
     return Page(text, needs_vision=_looks_scanned(page, text))
@@ -77,7 +87,10 @@ def _read_page(page: pdfium.PdfPage) -> Page:
 def _looks_scanned(page: pdfium.PdfPage, text: str) -> bool:
     chars = sum(1 for ch in text if not ch.isspace())
     if chars < MIN_CHARS_PER_PAGE:
-        return True
+        if _image_coverage(page) >= MIN_IMAGE_COVERAGE:
+            return True
+        paths = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_PATH], max_depth=MAX_FORM_DEPTH)
+        return sum(1 for _ in itertools.islice(paths, MIN_VECTOR_PATHS)) >= MIN_VECTOR_PATHS
     return chars <= MAX_CHARS_ON_IMAGE_PAGE and _image_coverage(page) >= IMAGE_COVERAGE
 
 

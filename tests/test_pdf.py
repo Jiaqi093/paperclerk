@@ -48,9 +48,32 @@ def test_text_pdf_gives_text_per_page(tmp_path):
     assert not doc.needs_vision
 
 
-def test_blank_page_is_flagged_for_vision(tmp_path):
-    doc = _parse(_pdf(tmp_path / "scan.pdf", [{}]))
+def test_photo_without_text_is_flagged_for_vision(tmp_path):
+    doc = _parse(_pdf(tmp_path / "scan.pdf", [{"image": _photo(tmp_path)}]))
     assert doc.pages == (Page("", needs_vision=True),)
+
+
+def test_nearly_empty_page_is_not_sent_to_vision(tmp_path):
+    # Like the last page of a real airline e-ticket: one link in a frame, nothing else.
+    path = tmp_path / "ticket.pdf"
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.rect(36, H - 80, W - 72, 40)
+    c.drawString(W / 2 - 60, H - 64, "Important Legal Notices")
+    c.showPage()
+    c.save()
+    assert _parse(path).pages == (Page("Important Legal Notices"),)
+    assert _parse(_pdf(tmp_path / "blank.pdf", [{}])).pages == (Page(""),)
+
+
+def test_text_drawn_as_outlines_is_flagged_for_vision(tmp_path):
+    # Some generators convert text to vector shapes: no text layer, but plenty to read.
+    path = tmp_path / "outlined.pdf"
+    c = canvas.Canvas(str(path), pagesize=A4)
+    for i in range(300):
+        c.rect(40 + (i % 30) * 17, 700 - (i // 30) * 20, 10, 12, fill=1)
+    c.showPage()
+    c.save()
+    assert _parse(path).needs_vision
 
 
 def test_photo_with_a_stamped_line_is_a_scan_but_only_that_page(tmp_path):
@@ -83,7 +106,7 @@ def test_damaged_pdf_raises_parse_error(tmp_path):
 def test_scan_indexes_pdfs_and_reports_why_one_failed(clerk, inbox):
     from paperclerk.db import repo
 
-    _pdf(inbox / "bill.pdf", [{"lines": [BILL]}, {}])
+    _pdf(inbox / "bill.pdf", [{"lines": [BILL]}, {"image": _photo(inbox.parent)}])
     _pdf(inbox / "locked.pdf", [{"lines": [BILL]}], encrypt="secret")
     r = clerk.scan()
     assert [p.rsplit("/", 1)[-1] for p in r.failed] == ["locked.pdf"]
@@ -172,3 +195,19 @@ def test_unreadable_pdf_is_retried_not_recorded(clerk, inbox):
         pdf.chmod(0o644)
     clerk.scan()
     assert any(d["path"].endswith("bill.pdf") for d in clerk.list_documents())
+
+
+def test_card_sized_scan_on_a_page_is_flagged(tmp_path):
+    # An 85x55 mm card scanned onto A4 covers about 7.5% of the page.
+    path = tmp_path / "card.pdf"
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.drawImage(_photo(tmp_path), 72, 500, 241, 156)
+    c.showPage()
+    c.save()
+    assert _parse(path).needs_vision
+
+
+def test_hyphen_across_a_line_break_is_kept_as_a_hyphen(tmp_path):
+    pdf = _pdf(tmp_path / "t.pdf", [{"lines": ["Taxes/Fees/Carrier-", "Imposed Charges $12.40"]}])
+    assert "\ufffe" not in _parse(pdf).text
+    assert "Carrier-Imposed" in _parse(pdf).text

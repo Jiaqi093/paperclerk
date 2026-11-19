@@ -30,8 +30,8 @@ Done in PR #2: incremental scan, content-hash identity, `document_paths`, error 
 schema migrations.
 
 - [x] PDF parser (pypdfium2, not PyMuPDF: AGPL): text per page; a page with under
-      `MIN_CHARS_PER_PAGE` (30) chars, or mostly covered by images with little text, gets
-      `needs_vision`. Failure reasons ("password protected") stored in `parse_error`.
+      `MIN_CHARS_PER_PAGE` (30) chars and a picture or outlined text on it, or mostly covered by
+      images with little text, gets `needs_vision`. Failure reasons ("password protected") stored in `parse_error`.
 - [x] DOCX parser (python-docx, reading the XML): paragraphs, tables as Markdown, headers and
       footers, text boxes; tracked deletions and comments skipped; one page. A body with an
       image and little text gets `needs_vision`. Old `.doc` stays unsupported.
@@ -49,6 +49,11 @@ schema migrations.
       cloud-only and failure reasons, plus a status column; migrate's `ROLLBACK` guarded; the
       scan takes the database lock per file, so the API stays responsive during a scan.
       (Unreadable folders are still reported on every scan, on purpose.)
+
+Real-folder check (2026-11-20, 40 real bills: energy, water, internet, insurance, tickets):
+all parsed, no failures, rescan does no work. It found two bugs, fixed in PdfParser v2: a nearly
+empty last page was flagged for vision, and PDFium's U+FFFE hyphen marker leaked into text.
+That folder had only text PDFs, so scanned PDFs, DOCX and images still need a real check.
 
 **Done when:** a real folder mixing text PDFs, scanned PDFs, DOCX and images scans cleanly; every
 document has text or `needs_vision`; encrypted and corrupt files have tests.
