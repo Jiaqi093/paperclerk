@@ -2,8 +2,6 @@
 
 > A local-first AI agent that finds your invoices, bills and subscriptions across email and folders — and organizes them safely, with preview and undo.
 
-**Status:** early development — F1 ingest in progress. See the roadmap below.
-
 ## Why
 
 Personal admin is scattered: an invoice in a Gmail attachment, the same invoice in Downloads,
