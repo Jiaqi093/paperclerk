@@ -8,24 +8,40 @@ A public synthetic set is planned (see [docs/roadmap.md](../docs/roadmap.md#f6--
 in `evals/data/labels.jsonl`, one JSON object per line, using the same fields as
 `paperclerk.extract.schemas.Extraction` plus `file`. See `labels.example.jsonl` for the format.
 
+Follow [labeling-guide.md](labeling-guide.md): label before looking at any model output.
+
 Target: ~100 documents covering every `DocType`, including hard cases
 (scanned receipts, multi-currency, invoices with tax lines, renewal emails saved as PDF).
 
-## Metrics
-
-| Metric | What it measures |
-|---|---|
-| `doc_type` accuracy | classification |
-| per-field match (`vendor`, `amount`, `currency`, `issue_date`, `due_date`): amount within 0.01, vendor names normalized, dates compared as dates | extraction |
-| review-queue precision | of items flagged low-confidence, how many were actually wrong |
-| duplicate detection precision / recall | same invoice from email + disk merged correctly |
-| confidence calibration | whether stated confidence matches accuracy; sets `review_threshold` |
-| cost and latency per document | recorded with every run |
-
-## Run
+## Label
 
 ```bash
-uv run python evals/run_eval.py --labels evals/data/labels.jsonl
+uv run python evals/label.py
 ```
 
-Results are appended to `evals/results.md` so the README can show progress over time.
+Shows each unlabelled document in `evals/data/`, asks its type, then only the fields that type
+can have. Enter leaves a field empty. Saved after every document; run again to continue.
+
+## Score
+
+```bash
+uv run python evals/run_eval.py --predictions evals/data/predictions.jsonl [--save]
+```
+
+Predictions are the model's saved answers, one JSON object per line:
+`{"file", "output": {Extraction fields} | null, "error", "model", "prompt_version", "cost_usd",
+"latency_ms"}`. Scoring them is free and repeatable; producing them (F2) is the part that calls
+the API.
+
+The scorecard, in order of importance:
+
+1. **Red line**: a fabricated company, amount or date that would reach the library without
+   review (confidence above the threshold and every value found in the document). Must be 0;
+   the command exits with status 1 otherwise.
+2. **Fabrications**: all of them, including those sent to review. Must not go up.
+3. **Fully correct**: right type and the key fields of that type. A drop of 1 document is noise.
+4. Cost per document and latency.
+
+Then by type, by field (correct / missed / fabricated / wrong), the review queue, a calibration
+table, and every mistake with file names (printed only). `--save` appends totals, never file
+names, to `results.md`; runs are compared only on the same label set.

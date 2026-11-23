@@ -65,19 +65,39 @@ document has text or `needs_vision`; encrypted and corrupt files have tests.
 
 ## F6 — Evals (starts with F2)
 
-- [ ] `labels.jsonl` (format in `evals/labels.example.jsonl`) and ~100 labelled documents covering every `DocType`
-- [ ] Metrics: `doc_type` accuracy, per-field match, review-queue precision, dedupe
-      precision/recall; results appended to `evals/results.md`
+Scoring and labeling tool done (`evals/run_eval.py`, `evals/label.py`); no real numbers yet:
+they need labels and F2 predictions.
+
+- [x] Labeling guide ([evals/labeling-guide.md](../evals/labeling-guide.md)): one correct answer
+      per document, type tie-break order, what "amount" means per type, key fields per type, at
+      most 3 documents per company, labels changed only when they break a rule
+- [x] Fabrication red line: a fabricated value reaching the library without review must be 0
+      (one case blocks the change, the scorer exits non-zero); all fabrications are counted and
+      must not increase. Fabrication concerns company, amount and dates only; on scans a wrong
+      value that can't be found in the text counts as fabricated (strict).
+- [x] Fully correct = right type + the key fields of that type (invoice: company, amount, due
+      date; receipt: company, amount, payment date; subscription: company, amount, period,
+      renewal date; credit card statement: company, amount, due date; others: type only)
+- [x] Field matching rules _(new)_: amount within 0.01; vendor names normalized
+      ("Origin Energy Pty Ltd" = "Origin Energy"); dates compared as dates
+- [x] Scorecard: verdict vs the last run on the same labels (red line → fabrications → fully
+      correct, 1 document = flat), by type, by field (correct / missed / fabricated / wrong),
+      review queue, calibration table, every mistake listed; totals appended to
+      `evals/results.md` with `--save`
+- [x] Cost and latency recorded with every run _(new)_, when predictions carry them
+- [x] Labeling tool: shows the text, asks the type, then only that type's fields; warns past 3
+      documents per company; never shows model answers
+- [ ] ~30 labelled real documents, then ~100 covering every `DocType`, with bait documents
+      (promotions, quotes, emails with dates)
+- [ ] Predictions: run F2 over the labelled documents into `predictions.jsonl` (needs F2)
 - [ ] Synthetic dataset _(new)_: generated invoices, receipts and renewal emails (PDF and image)
       that can be published, so results are reproducible. Real documents stay a private
       supplement in `evals/data/`.
-- [ ] Field matching rules _(new)_: amount within 0.01; vendor names normalized
-      ("Origin Energy Pty Ltd" = "Origin Energy"); dates compared as dates
-- [ ] Confidence calibration _(new)_: does 0.9 confidence mean ~90% correct? Set
-      `review_threshold` (now 0.8) from this, not by guess.
-- [ ] Cost and latency recorded with every run _(new)_, so each change reports accuracy and cost
-- [ ] CI _(new)_: scoring code runs on every PR against cached model outputs (free); full runs
-      that call the API are triggered manually
+- [ ] Confidence calibration _(new)_: set `review_threshold` (now 0.8) from the calibration
+      table: the lowest review load with at most 5% of wrong documents reaching the library
+- [ ] CI _(new)_: scoring code is tested on every PR; still to do: score cached outputs of the
+      synthetic set. Full runs that call the API are triggered manually.
+- [ ] Dedupe precision/recall (F3)
 - [ ] Later suites _(new)_: prompt-injection set (F3/F4), retrieval recall@k and MRR (F5),
       Q&A answers graded by an LLM judge that is checked against human grades (F5)
 
@@ -91,6 +111,10 @@ first real numbers.
       through vision
 - [ ] Vision input per type: PDF pages flagged `needs_vision` rendered to images (pypdfium2);
       images as-is; DOCX can't be rendered without LibreOffice, so send its embedded pictures
+- [ ] Source check (`extract/source_check.py` written and used by F6; wire it into F2): company,
+      amount and dates must appear in the document's text, otherwise
+      the document goes to review (keeps fabricated values out of the library; scanned pages
+      have no text to check against, to be decided)
 - [ ] Results in `extractions`; low confidence goes to the review queue
 - [ ] Review queue in the web UI: confirm or correct fields; corrected rows marked
       `human_verified`
@@ -148,7 +172,7 @@ dedupe precision/recall are measured; injection success rate is 0.
 
 ## F5 — Bills dashboard and Q&A
 
-- [ ] Dashboard: bills due this month, subscriptions renewing soon
+- [ ] Dashboard: bills due this month (invoices, plus credit card statements with a due date), subscriptions renewing soon
 - [ ] Subscription aggregation _(new — the table exists, the logic doesn't)_: recurring bills
       from one vendor become one subscription
 - [ ] LangGraph Q&A with tools `query_bills`, `query_subscriptions`, `search_documents`,
