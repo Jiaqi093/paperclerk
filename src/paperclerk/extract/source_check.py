@@ -20,11 +20,22 @@ from paperclerk.extract.schemas import Extraction
 LITERAL_FIELDS = ("vendor", "amount", "issue_date", "due_date")
 
 # Legal-form words dropped from the end of a company name: "Origin Energy Pty Ltd" = "Origin
-# Energy". Only trailing words, so "Co-op Insurance" keeps its "co".
+# Energy". Only trailing words, so "Co-op Insurance" keeps its "co". Malaysian forms too:
+# "Sdn Bhd" (Sendirian Berhad), "Bhd", "S/B".
 _LEGAL_SUFFIXES = frozenset(
     "pty ltd limited inc incorporated llc plc corp corporation co company gmbh ag sa bv nv pte"
-    " lp llp".split()
+    " lp llp sdn bhd sendirian berhad".split()
 )
+# Written forms that aren't single words: "S/B" or "S/BHD" means Sdn Bhd; "(M)" or "(Malaysia)"
+# before the legal form, as in "AEON CO. (M) BHD", is dropped. Applied to the name and the text
+# alike, so "ABC S/B (Kepong)" is still found in a text that prints it that way.
+_SLASH_SDN_BHD = re.compile(r"(?<![\w'’])s\s*/\s*b(?:hd)?\b", re.IGNORECASE)
+# Only before a legal form, so "Length (m) Width (m)" in a table keeps its unit.
+_COUNTRY_MARK = re.compile(r"\(\s*(?:m|malaysia)\s*\)(?=\s*(?:sdn|bhd|berhad)\b)", re.IGNORECASE)
+
+
+def _company_words(text: str) -> list[str]:
+    return _words(_COUNTRY_MARK.sub(" ", _SLASH_SDN_BHD.sub(" bhd ", text)))
 
 
 def _words(text: str) -> list[str]:
@@ -34,7 +45,7 @@ def _words(text: str) -> list[str]:
 
 def normalize_vendor(name: str) -> str:
     """Company name reduced to the words that identify it."""
-    words = _words(name)
+    words = _company_words(name)
     while len(words) > 1 and words[-1] in _LEGAL_SUFFIXES:
         words.pop()
     if len(words) > 1 and words[0] == "the":
@@ -53,7 +64,7 @@ def vendor_in_text(vendor: str, text: str) -> bool:
     name = normalize_vendor(vendor)
     if not any(len(w) >= 2 and w not in _GENERIC for w in name.split()):
         return False
-    return f" {name} " in f" {' '.join(_words(text))} "
+    return f" {name} " in f" {' '.join(_company_words(text))} "
 
 
 # A number as printed: 1,200.00 / 1200.5 / 1.200,00 (European) / 214. Not part of a longer
@@ -66,10 +77,13 @@ _NUMBER = re.compile(
 _CURRENCY = r"(?:[$€£¥]|\b(?:AUD|USD|EUR|GBP|NZD|CAD|JPY|CNY|RMB|SGD|HKD|CHF|INR)\b)"
 _CURRENCY_BEFORE = re.compile(_CURRENCY + r"\s*-?\s*$", re.IGNORECASE)
 _CURRENCY_AFTER = re.compile(r"^\s*" + _CURRENCY, re.IGNORECASE)
-# A unit or time after the number: a usage figure or a clock time, not money.
+# A unit or time after the number: a usage figure or a clock time, not money. A letter that
+# starts a dotted abbreviation isn't a unit: "164.00 G.S.T." is money, not grams. Only a real
+# abbreviation (letter, dot, letter, dot) counts, so "214.37 kWh.Total" is still a unit, and
+# "m.p.h." and "g.s.m." are units spelled with dots.
 _UNIT_AFTER = re.compile(
     r"^\s*(?:%|:\d|(?:kwh|kw|mwh|mj|gj|gb|mb|tb|kg|g|l|ml|km|m|c|cents?|units?|days?|hours?|hrs?"
-    r"|am|pm)\b)",
+    r"|am|pm)\b(?!\.(?!p\.h|s\.m)[a-z]\.))",
     re.IGNORECASE,
 )
 

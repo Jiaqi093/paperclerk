@@ -144,3 +144,58 @@ def test_day_month_swap_is_not_found():
 @pytest.mark.parametrize("vendor", ["The", "Pty Ltd", "And Co", "Ltd", "Bank", "Energy Pty Ltd"])
 def test_generic_words_are_never_a_vendor(vendor):
     assert not vendor_in_text(vendor, "The Origin Energy Pty Ltd and Co, your bank account")
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("OJC MARKETING SDN BHD", "ojc marketing"),
+        ("99 SPEED MART S/B", "99 speed mart"),
+        ("AEON CO. (M) BHD", "aeon"),
+        ("MR. D.I.Y. (M) SDN BHD", "mr d i y"),
+        ("Plan B", "plan b"),  # a lone B is not S/B
+    ],
+)
+def test_malaysian_legal_forms_are_ignored(name, expected):
+    assert normalize_vendor(name) == expected
+
+
+def test_abbreviation_after_an_amount_is_not_a_unit():
+    assert amount_in_text(164.0, "Total Invoice Value 164.00 G.S.T. 14.90")
+    assert not amount_in_text(214.37, "Usage 214.37 kWh.")  # a unit at the end of a sentence
+    assert not amount_in_text(5.0, "net weight 5.00 g.")
+    assert amount_in_text(164.0, "Total 164.00 G.S.T 14.90")
+
+
+@pytest.mark.parametrize(
+    ("amount", "text"),
+    [(214.37, "Usage 214.37 kWh.Total due $50.00"), (5.0, "5.00 g.Price"), (12.5, "12.50 km.Fare")],
+)
+def test_unit_before_a_full_stop_without_space_is_still_a_unit(amount, text):
+    # PDF text often drops the space after a full stop
+    assert not amount_in_text(amount, text)
+
+
+@pytest.mark.parametrize(
+    ("vendor", "text"),
+    [
+        ("ABC S/B (Kepong)", "ABC S/B (Kepong) tax invoice"),
+        ("AEON (M) Credit", "AEON (M) CREDIT"),
+        ("Nestle Products", "NESTLE PRODUCTS (MALAYSIA) SDN BHD"),
+        ("XYZ", "XYZ S/BHD"),
+    ],
+)
+def test_malaysian_forms_match_the_text_as_printed(vendor, text):
+    assert vendor_in_text(vendor, text)
+
+
+def test_slash_b_inside_ordinary_words_is_left_alone():
+    assert normalize_vendor("Jack's/B&Q") != normalize_vendor("Jack")
+
+
+def test_review_edge_cases():
+    assert not vendor_in_text("Length Width", "Length (m) Width (m)")  # a unit, not Malaysia
+    assert vendor_in_text("AEON", "AEON CO. (M) BHD")
+    assert normalize_vendor("Jack’s/B&Q") == normalize_vendor("Jack's/B&Q")
+    assert not amount_in_text(80.0, "speed 80.00 m.p.h.")
+    assert not amount_in_text(90.0, "paper 90.00 g.s.m.")

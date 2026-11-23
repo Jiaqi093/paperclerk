@@ -11,7 +11,8 @@ mean the same thing. Change a rule here first, then relabel the documents it aff
 - **One correct answer per document.** If two types or two values seem to fit, the tie-break rules
   below pick one. Don't record "either is fine": scores would stop meaning anything.
 - **Only what the document shows.** If a field isn't on the document, the label is empty. Don't
-  fill it from memory ("I know Netflix is monthly").
+  fill it from memory. One exception: recurring and period, which may be inferred (§2), may also
+  come from what you know about the charge; say so in the note.
 
 ## 1. Document type
 
@@ -35,7 +36,7 @@ come first, because missing a due date costs more than misfiling.
 Fill a field only when the document shows it. Otherwise leave it empty.
 
 **Company (vendor)**: who issued the document, as the brand people know: "Origin Energy", not
-"Origin Energy Retail Pty Ltd". Suffixes like Pty Ltd, Inc, LLC are ignored when scoring, so
+"Origin Energy Retail Pty Ltd". Suffixes like Pty Ltd, Inc, LLC, Sdn Bhd are ignored when scoring, so
 either form is fine. For a marketplace, the company you paid (Amazon, not the third-party seller)
 unless the document is issued by the seller itself. Filled for **every** type whenever the document
 shows who issued it, including disposable ones (the shop behind a sale email).
@@ -63,7 +64,10 @@ Dates must be a full day. "October 2026" or a billing period alone → empty.
 
 **Recurring / period**: is this a charge that repeats, and how often (weekly, monthly, quarterly,
 yearly)? May be inferred from wording: "your next bill in 3 months", "billing period 1 Jul – 30
-Sep" → quarterly. Empty when the document gives no hint.
+Sep" → quarterly. Also from what you know about the charge, such as other bills from the same
+company; say so in the note. A one-off purchase (a ticket, a shop receipt) is recurring: no.
+Empty when nothing hints either way. An amount that changes each time (strata levies, energy
+bills) is still recurring.
 
 ## 3. Key fields per type
 
@@ -121,6 +125,11 @@ confidence, the red line is crossed.
 | Invoice with a "PAID" stamp | receipt; amount = what was paid; issue date = payment date if shown, else invoice date |
 | "Your bill of $120 will be debited on 24 Oct" | invoice; amount $120; due date 24 Oct |
 | Netflix monthly charge receipt | receipt; Netflix; amount; issue date; recurring yes, monthly |
+| Subscription bill "Amount due $170.01, due 16 Nov" that your card is charged for automatically | invoice, like "will be debited": it isn't marked paid yet; recurring yes, monthly. The receipt sent after the charge is a receipt. Paying automatically doesn't change the type |
+| Payment history for a recurring charge (insurance premiums), listing a debit already made | receipt; amount = the debit made, not the listed premium if they differ; issue date = the debit date; recurring yes, with its period |
+| Quarterly strata levy notice, a different amount each quarter | invoice; amount = this notice's total to pay; recurring yes, quarterly, even if this notice doesn't print the period (note where it came from) |
+| Bill that names two companies: who it is from, and who handles it | company = the brand in the letterhead, whose bill it is: a levy notice on Vantage Strata letterhead, payable to "The Owners Unit Plan 4312" → Vantage Strata; an Icon Water bill with "billing services provided by ActewAGL" in the small print → Icon Water. The marketplace rule (§2) still applies to online orders |
+| Ticket with a fare plus extras (seat, card surcharge) | receipt; amount = the total actually paid, extras included |
 | "Your Spotify price goes up to $13.99 from 1 Dec" | subscription; Spotify; $13.99; due date 1 Dec if it is the next charge date; monthly |
 | Quote for a plumbing job | disposable; company = the plumber; amount empty (a quote isn't a bill) |
 | Sale email "Was $99, now $49.99" | disposable; company = the shop; amount empty (bait) |
