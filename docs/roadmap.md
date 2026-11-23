@@ -88,7 +88,11 @@ they need labels and F2 predictions.
 - [x] Labeling tool: shows the text, asks the type, then only that type's fields; warns past 3
       documents per company; never shows model answers
 - [ ] ~30 labelled real documents, then ~100 covering every `DocType`, with bait documents
-      (promotions, quotes, emails with dates)
+      (promotions, quotes, emails with dates). 19 labelled so far (2026-11-23: bills, receipts,
+      insurance payment history); bait and scans to come from Gmail (F3)
+- [ ] Public sets scored separately _(new)_: 60 SROIE receipts sampled (scans, Malaysia;
+      company, date and total annotated). DocILE needs an access token. Still to build:
+      fields a set doesn't annotate go unscored, one scorecard per set
 - [ ] Predictions: run F2 over the labelled documents into `predictions.jsonl` (needs F2)
 - [ ] Synthetic dataset _(new)_: generated invoices, receipts and renewal emails (PDF and image)
       that can be published, so results are reproducible. Real documents stay a private
