@@ -34,18 +34,29 @@ Design decisions and trade-offs live in [docs/architecture.md](docs/architecture
 
 | # | Feature | Status |
 |---|---|---|
-| F1 | Local file ingest & incremental indexing | 🟡 scanner + text/image parsers; PDF/DOCX next |
+| F1 | Local file ingest & incremental indexing | ✅ PDF, DOCX, images, text; per-page text; scans flagged for vision |
 | F2 | Classification & structured extraction with confidence + review queue | ⚪ |
 | F3 | Gmail (read-only) sync, cross-source dedupe | ⚪ |
 | F4 | Organize agent: plan → preview → approve → execute, with undo | ⚪ |
 | F5 | Bills dashboard + Q&A with citations | ⚪ |
-| F6 | Evals: classification / extraction / dedupe accuracy | ⚪ |
+| F6 | Evals: classification / extraction / dedupe accuracy | ✅ v1: labeling guide, labeling tool, scorecard with a fabrication red line; numbers wait for F2 |
 | + | MCP server | ⚪ |
 | F7 | Distillation to a small local model (stretch) | ⚪ |
 
 ## Eval results
 
-_First numbers in week 2._ See [evals/README.md](evals/README.md) for methodology.
+_First numbers once F2 produces extractions._ The scorer and labels are ready:
+
+- **Red line:** a made-up company, amount or date that reaches the library without a person
+  seeing it must be **0**. One case blocks the change. A source check (is the value actually
+  written in the document?) and a confidence threshold send doubtful documents to review.
+- **Fully correct:** right document type plus that type's key fields (bill: company, amount,
+  due date; receipt: company, amount, payment date).
+- **Data:** real documents labelled by hand (private, never committed) and public sets scored
+  separately, starting with SROIE receipts.
+
+Rules for labels: [evals/labeling-guide.md](evals/labeling-guide.md). Methodology and file
+formats: [evals/README.md](evals/README.md).
 
 ## Quick start
 
@@ -68,6 +79,13 @@ npm run dev                           # http://localhost:3000
 ```
 
 Tests: `uv run pytest`
+
+Evals (documents and labels live in the git-ignored `evals/data/`):
+
+```bash
+uv run python evals/label.py --labels evals/data/real/labels.jsonl      # label documents
+uv run python evals/run_eval.py --predictions evals/data/predictions.jsonl   # score (needs F2)
+```
 
 ## Privacy
 
