@@ -356,7 +356,7 @@ def test_migration_makes_old_unchecked_answers_stale(monkeypatch):
     )
     conn.commit()
     monkeypatch.setattr(connection, "MIGRATIONS", all_migrations)
-    init_db(conn)  # upgrade to 6
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    init_db(conn)  # upgrade
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(all_migrations)
     assert repo.current_extraction(conn, 1) is None  # never checked: read again
     assert repo.documents_to_extract(conn) == [1]

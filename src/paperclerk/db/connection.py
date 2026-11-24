@@ -81,6 +81,33 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         # Answers from before these checks existed were never checked: read them again.
         "UPDATE extractions SET stale = 1 WHERE human_verified = 0",
     ),
+    # 7: every model call with what it cost (usage summary, monthly budget), and reads kept
+    #    for reuse: the same content, pages, prompt version, models and effort are never paid
+    #    for twice (extract/cache.py).
+    (
+        """CREATE TABLE llm_calls (
+            id                 INTEGER PRIMARY KEY,
+            document_id        INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+            purpose            TEXT    NOT NULL,   -- read / retry / stronger model / second read
+            asked_model        TEXT    NOT NULL,
+            model              TEXT,               -- as the API reported it
+            prompt_version     TEXT,
+            input_tokens       INTEGER,
+            output_tokens      INTEGER,
+            cache_read_tokens  INTEGER,
+            cache_write_tokens INTEGER,
+            latency_ms         INTEGER,
+            cost_usd           REAL,
+            error              TEXT,               -- NULL: the call gave an answer
+            created_at         TEXT    NOT NULL
+        )""",
+        "CREATE INDEX idx_llm_calls_created ON llm_calls(created_at)",
+        """CREATE TABLE extraction_cache (
+            key         TEXT PRIMARY KEY,
+            result_json TEXT NOT NULL,
+            created_at  TEXT NOT NULL
+        )""",
+    ),
 )
 
 

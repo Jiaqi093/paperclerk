@@ -35,7 +35,7 @@ Design decisions and trade-offs live in [docs/architecture.md](docs/architecture
 | # | Feature | Status |
 |---|---|---|
 | F1 | Local file ingest & incremental indexing | ✅ PDF, DOCX, images, text; per-page text; scans flagged for vision |
-| F2 | Classification & structured extraction with confidence + review queue | ⚪ |
+| F2 | Classification & structured extraction with confidence + review queue | 🟡 core done: extraction with quotes, source/evidence check, library or review, cost log and cache; review UI and background jobs next |
 | F3 | Gmail (read-only) sync, cross-source dedupe | ⚪ |
 | F4 | Organize agent: plan → preview → approve → execute, with undo | ⚪ |
 | F5 | Bills dashboard + Q&A with citations | ⚪ |
@@ -83,9 +83,15 @@ Tests: `uv run pytest`
 Evals (documents and labels live in the git-ignored `evals/data/`):
 
 ```bash
-uv run python evals/label.py --labels evals/data/real/labels.jsonl      # label documents
-uv run python evals/run_eval.py --predictions evals/data/predictions.jsonl   # score (needs F2)
+uv run python evals/label.py --labels evals/data/real/labels.jsonl     # label documents
+uv run python evals/predict.py --labels evals/data/real/labels.jsonl   # F2 reads them ($)
+uv run python evals/run_eval.py --labels evals/data/real/labels.jsonl \
+    --predictions evals/data/real/predictions.jsonl                     # score
 ```
+
+Reading documents (`paperclerk extract`) calls the model: it estimates the cost first and asks
+above `confirm_above_usd` ($10 by default). `paperclerk review` lists what waits for you,
+`paperclerk usage` what this month's calls cost.
 
 ## Privacy
 

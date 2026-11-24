@@ -14,6 +14,7 @@ from typing import Any
 
 from paperclerk.config import Settings
 from paperclerk.db import connect, init_db, repo
+from paperclerk.extract.cache import pages_marker
 from paperclerk.ingest.parsers import Page, ParseError, Parser, parser_for
 from paperclerk.ingest.scanner import (
     FileInfo,
@@ -133,7 +134,13 @@ class ExtractRunResult:
     review: int = 0  # answered, waiting for a person
     failed: int = 0  # no answer (tried again once on the next run)
     skipped: list[str] = field(default_factory=list)  # file gone or changed: rescan first
+    reused: int = 0  # of `read`: answered from an earlier identical read, at no cost
     cost_usd: float = 0.0
+    stopped: str | None = None  # why the run stopped early (the monthly budget)
+
+
+class BudgetReached(Exception):
+    pass
 
 
 def _read_content(paths: list[str], sha256: str) -> bytes | None:
@@ -151,16 +158,6 @@ def _read_content(paths: list[str], sha256: str) -> bytes | None:
         if hashlib.sha256(data).hexdigest() == sha256:
             return data
     return None
-
-
-def _pages_marker(pages: list[Page]) -> str:
-    """Identifies a document's pages, so an answer read from them is only stored as current if
-    they are still the same when it is stored."""
-    h = hashlib.sha256()
-    for page in pages:
-        h.update(f"{int(page.needs_vision)}:{len(page.text)}:".encode())
-        h.update(page.text.encode())
-    return h.hexdigest()
 
 
 class PaperClerk:
@@ -399,12 +396,26 @@ class PaperClerk:
             self._extract_lock.release()
 
     def _classify_pending(self, limit: int | None) -> ExtractRunResult:
+        from paperclerk.llm.pricing import PRICES, base_model
+
         result = ExtractRunResult()
+        llm = self.settings.llm
+        if llm.monthly_budget_usd is not None:
+            unpriced = [
+                m for m in (llm.model, llm.vision_model) if m and base_model(m) not in PRICES
+            ]
+            if unpriced:
+                # Its calls would cost an unknown amount, so the budget couldn't be kept.
+                result.stopped = f"no price known for {', '.join(unpriced)}: budget can't be kept"
+                return result
         with self._db_lock:
             pending = repo.documents_to_extract(self.conn, limit)
         for doc_id in pending:
             try:
                 self._classify_one(doc_id, result)
+            except BudgetReached as e:
+                result.stopped = str(e)
+                break
             except sqlite3.Error:  # storing failed (locked, disk full): next run tries again
                 log.exception("couldn't store the answer for document %s", doc_id)
                 with self._db_lock:
@@ -413,8 +424,45 @@ class PaperClerk:
                 result.skipped.append(f"document {doc_id}: couldn't be stored")
         return result
 
+    def estimate_pending(self, limit: int | None = None) -> tuple[int, float]:
+        """(documents due, about what reading them costs in USD). Reads already made with the
+        same content, prompt and models are reused, so they count as free."""
+        from paperclerk.extract import cache
+        from paperclerk.extract.estimate import document_cost
+        from paperclerk.ingest.parsers.base import ParsedDocument
+
+        llm = self.settings.llm
+        total = 0.0
+        with self._db_lock:
+            pending = repo.documents_to_extract(self.conn, limit)
+            for doc_id in pending:
+                row = self.conn.execute(
+                    "SELECT sha256, mime_type FROM documents WHERE id = ?", (doc_id,)
+                ).fetchone()
+                pages = repo.get_pages(self.conn, doc_id)
+                path = self.conn.execute(
+                    "SELECT MIN(path) FROM document_paths WHERE document_id = ?", (doc_id,)
+                ).fetchone()[0]
+                key = cache.cache_key(
+                    row["sha256"], pages, file_name=Path(path).name if path else "",
+                    model=llm.model, vision_model=llm.vision_model or None, effort=llm.effort,
+                )  # fmt: skip
+                if cache.get(self.conn, key) is None:
+                    doc = ParsedDocument(row["mime_type"] or "", tuple(pages))
+                    total += document_cost(
+                        doc, model=llm.model, vision_model=llm.vision_model or None
+                    )
+        return len(pending), total
+
+    def usage(self, since: str | None = None) -> list[dict[str, Any]]:
+        """Model calls and cost per day and model, this month unless `since` (UTC) is given."""
+        with self._db_lock:
+            return repo.usage_summary(self.conn, since or repo.month_start())
+
     def _classify_one(self, doc_id: int, result: ExtractRunResult) -> None:
+        from paperclerk.extract import cache
         from paperclerk.extract.classifier import extract
+        from paperclerk.extract.estimate import document_cost
         from paperclerk.extract.review import review_reasons
         from paperclerk.ingest.parsers.base import ParsedDocument
 
@@ -431,7 +479,7 @@ class PaperClerk:
                     (doc_id,),
                 )
             ]
-        marker = _pages_marker(pages)
+        marker = pages_marker(pages)
         doc = ParsedDocument(row["mime_type"] or "", tuple(pages))
         name = Path(paths[0]).name if paths else ""
         data = b""
@@ -452,23 +500,48 @@ class PaperClerk:
                 return
             data = found
 
-        answer, error = None, None
-        try:
-            answer = extract(
-                doc,
-                data,
-                name,
-                model=llm.model,
-                vision_model=llm.vision_model or None,
-                effort=llm.effort,
-                client_for=self._client_for,
-            )
-        except Exception as e:  # one document's trouble never stops the run
-            log.exception("extraction failed for document %s", doc_id)
-            error = f"{type(e).__name__}: {e}"[:300]
+        key = cache.cache_key(
+            row["sha256"], pages, file_name=name, model=llm.model,
+            vision_model=llm.vision_model or None, effort=llm.effort,
+        )  # fmt: skip
+        with self._db_lock:
+            answer = cache.get(self.conn, key)
+            if answer is None and llm.monthly_budget_usd is not None:
+                spent = repo.spent_since(self.conn, repo.month_start())
+                next_cost = document_cost(doc, model=llm.model, vision_model=llm.vision_model)
+                if spent + next_cost > llm.monthly_budget_usd:
+                    raise BudgetReached(
+                        f"monthly budget ${llm.monthly_budget_usd:.2f} reached "
+                        f"(spent ${spent:.2f} this month)"
+                    )
+        error = None
+        if answer is not None:
+            result.reused += 1
+        else:
+            try:
+                answer = extract(
+                    doc,
+                    data,
+                    name,
+                    model=llm.model,
+                    vision_model=llm.vision_model or None,
+                    effort=llm.effort,
+                    client_for=self._client_for,
+                )
+            except Exception as e:  # one document's trouble never stops the run
+                log.exception("extraction failed for document %s", doc_id)
+                error = f"{type(e).__name__}: {e}"[:300]
         result.read += 1
         if answer is not None and answer.cost_usd is not None:
             result.cost_usd += answer.cost_usd
+        if answer is not None and not answer.cached:
+            # Paid for: log the calls (the budget counts them) and keep the read for reuse at
+            # once, in a transaction of their own, so a failure to store the answer below never
+            # loses them or makes the next run pay again. The key holds the pages read, so a
+            # read of pages that have since changed is never reused for the new ones.
+            with self._db_lock, self.conn:
+                repo.insert_llm_calls(self.conn, doc_id, answer, commit=False)
+                cache.put(self.conn, key, answer, commit=False)
 
         with self._db_lock:
             # The model read these pages without the lock held: if a scan changed them since,
@@ -483,7 +556,7 @@ class PaperClerk:
             still_same = (
                 current is not None
                 and current["parse_status"] == repo.PARSE_OK
-                and _pages_marker(repo.get_pages(self.conn, doc_id)) == marker
+                and pages_marker(repo.get_pages(self.conn, doc_id)) == marker
             )
             if answer is None or answer.failed:
                 if answer is not None:

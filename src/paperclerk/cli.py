@@ -47,16 +47,44 @@ def docs(limit: int = 20, config: Path = ConfigOpt) -> None:
 @app.command()
 def extract(
     limit: int = typer.Option(None, help="Read at most this many documents"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask, whatever it costs"),
     config: Path = ConfigOpt,
 ) -> None:
     """Read new documents with the model (this calls the API and costs money)."""
-    r = _clerk(config).classify_pending(limit=limit)
+    clerk = _clerk(config)
+    count, usd = clerk.estimate_pending(limit=limit)
+    if count == 0:
+        typer.echo("nothing to read")
+        return
+    typer.echo(f"{count} document(s) to read, about ${usd:.2f}")
+    if usd > clerk.settings.llm.confirm_above_usd and not (
+        yes or typer.confirm("That's above your confirm_above_usd. Go ahead?")
+    ):
+        raise typer.Exit(1)
+    r = clerk.classify_pending(limit=limit)
     typer.echo(
-        f"read={r.read} library={r.accepted} review={r.review} failed={r.failed} "
-        f"skipped={len(r.skipped)} cost=${r.cost_usd:.4f}"
+        f"read={r.read} (reused={r.reused}) library={r.accepted} review={r.review} "
+        f"failed={r.failed} skipped={len(r.skipped)} cost=${r.cost_usd:.4f}"
     )
-    for path in r.skipped:
-        typer.echo(f"  skipped: {path} (file changed or gone; scan first)", err=True)
+    for item in r.skipped:
+        typer.echo(f"  skipped: {item}", err=True)
+    if r.stopped:
+        typer.echo(f"stopped: {r.stopped}", err=True)
+
+
+@app.command()
+def usage(config: Path = ConfigOpt) -> None:
+    """What model calls cost this month, per day and model."""
+    rows = _clerk(config).usage()
+    if not rows:
+        typer.echo("no model calls this month")
+        return
+    for r in rows:
+        typer.echo(
+            f"{r['day']}  {r['model']:<20} calls={r['calls']:<4} failed={r['failed']:<3} "
+            f"cost=${r['cost_usd']:.4f}  cached_input={r['cache_read_tokens']}"
+        )
+    typer.echo(f"total this month: ${sum(r['cost_usd'] for r in rows):.4f}")
 
 
 @app.command()
