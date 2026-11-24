@@ -267,3 +267,18 @@ def test_zip_bomb_is_refused(tmp_path, monkeypatch):
     d.save(path)
     with pytest.raises(ParseError, match="too large"):
         DocxParser().parse(path.read_bytes(), path)
+
+
+def test_deleted_picture_does_not_make_a_scan(tmp_path):
+    from PIL import Image
+
+    photo = tmp_path / "p.png"
+    Image.new("RGB", (60, 90), "white").save(photo)
+    d = docx.Document()
+    d.add_picture(str(photo))
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    run = next(d.element.body.iter(f"{w}r"))
+    deleted = run.makeelement(f"{w}del", {})
+    run.addprevious(deleted)
+    deleted.append(run)
+    assert not _parse(d, tmp_path).needs_vision

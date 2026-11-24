@@ -37,7 +37,9 @@ MAX_CHARS_ON_IMAGE_PAGE = 200
 MAX_FORM_DEPTH = 8
 
 # PDFium is process-global and not thread-safe: one PDF at a time, whoever is asking.
-_pdfium_lock = threading.Lock()
+# Re-entrant, so cleanup that runs while the same thread holds it (a generator closed by the
+# garbage collector) can't deadlock.
+PDFIUM_LOCK = threading.RLock()
 
 
 class PdfParser:
@@ -54,7 +56,7 @@ class PdfParser:
     version = 3
 
     def parse(self, data: bytes, path: Path) -> ParsedDocument:
-        with _pdfium_lock:
+        with PDFIUM_LOCK:
             try:
                 pdf = pdfium.PdfDocument(data)
             except pdfium.PdfiumError as e:

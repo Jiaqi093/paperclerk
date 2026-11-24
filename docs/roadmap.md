@@ -113,8 +113,12 @@ first real numbers.
 - [ ] `AnthropicClient.structured()`: forced tool call, Pydantic validation, one retry on failure
 - [ ] Classification prompt (`src/paperclerk/extract/prompts/classify.md`); `needs_vision` documents and images go
       through vision
-- [ ] Vision input per type: PDF pages flagged `needs_vision` rendered to images (pypdfium2);
-      images as-is; DOCX can't be rendered without LibreOffice, so send its embedded pictures
+- [x] Model input (`extract/inputs.py`): pages with text go as text only; pages flagged
+      `needs_vision` go as JPEG images (PDF pages rendered with pypdfium2, photos turned upright,
+      DOCX scans as their embedded pictures), long edge 2000 px. The whole document is sent,
+      never cut for length; only what one request can carry (context window, 600 images, 128 MB) can leave pages
+      out, and then the document goes to review. The file name is sent as a hint only (no
+      folders); document text is wrapped as data and can't close its own tags.
 - [ ] Source check (`extract/source_check.py` written and used by F6; wire it into F2): company,
       amount and dates must appear in the document's text, otherwise
       the document goes to review (keeps fabricated values out of the library; scanned pages

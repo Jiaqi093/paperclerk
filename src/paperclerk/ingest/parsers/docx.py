@@ -49,7 +49,8 @@ class DocxParser:
     """
 
     suffixes = frozenset({".docx"})
-    version = 1
+    # 2: a picture inside a tracked deletion no longer makes the document look scanned
+    version = 2
 
     def parse(self, data: bytes, path: Path) -> ParsedDocument:
         if data.startswith(OLE_MAGIC):
@@ -202,4 +203,9 @@ def _natural_key(s: str) -> list[int | str]:
 
 
 def _has_image(body) -> bool:
-    return any(next(body.iter(tag), None) is not None for tag in IMAGE_TAGS)
+    return any(not _in_skipped(el) for el in body.iter(*IMAGE_TAGS))
+
+
+def _in_skipped(el) -> bool:
+    """Inside a tracked deletion or similar: not part of the document as it reads now."""
+    return any(a.tag in SKIPPED for a in el.iterancestors())
