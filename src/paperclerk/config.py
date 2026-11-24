@@ -22,7 +22,7 @@ class LLMSettings(BaseModel):
     vision_model: str | None = "claude-opus-5-5"
     review_threshold: float = Field(0.8, ge=0.0, le=1.0)
     # `paperclerk extract` asks before a run expected to cost more than this (USD).
-    confirm_above_usd: float = Field(10.0, ge=0.0)
+    confirm_above_usd: float = Field(1.0, ge=0.0)
     # Stop reading for the rest of the month once model calls have cost this much (USD).
     # Unset: no limit.
     monthly_budget_usd: float | None = Field(None, ge=0.0)

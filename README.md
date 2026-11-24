@@ -90,7 +90,7 @@ uv run python evals/run_eval.py --labels evals/data/real/labels.jsonl \
 ```
 
 Reading documents (`paperclerk extract`) calls the model: it estimates the cost first and asks
-above `confirm_above_usd` ($10 by default). `paperclerk review` lists what waits for you,
+above `confirm_above_usd` ($1 by default). `paperclerk review` lists what waits for you,
 `paperclerk usage` what this month's calls cost.
 
 ## Privacy
