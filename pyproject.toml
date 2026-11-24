@@ -15,6 +15,7 @@ dependencies = [
     "langgraph>=0.2",
     "pypdfium2>=5",
     "charset-normalizer>=3.3",
+    "pillow>=11",
 ]
 
 [project.scripts]
