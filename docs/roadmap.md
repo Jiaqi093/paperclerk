@@ -136,12 +136,21 @@ first real numbers.
 - [ ] On-device text recognition for scans (macOS Vision, free, nothing leaves the machine): the
       recognised text lets the source and evidence check run on scanned pages too, so most scans
       no longer need review. The model's confidence alone never lets a scan skip review.
-- [ ] Results in `extractions`; low confidence goes to the review queue
+- [x] Library or review (`extract/review.py`, `paperclerk extract`, `paperclerk review`): a
+      document waits for a person when there's no answer, confidence is under
+      `review_threshold`, a value fails the check, or a page wasn't shown; every reason is
+      stored. Waiting answers are only shown, marked unconfirmed (F5 lists such bills apart);
+      nothing renames or files a document on their strength.
+- [x] Results in `extractions`, every read kept as history; the current answer is the newest
+      one the user verified, else the newest whose checks still hold. A change in a document's
+      text makes its reads stale (verified ones stay), so it's read again. A failed read is
+      tried once more on the next run, then waits for review. A new prompt or model doesn't
+      re-read documents already read: that's a deliberate re-read (to do: a command for it).
 - [ ] Review queue in the web UI: confirm or correct fields; corrected rows marked
       `human_verified`
 - [ ] `llm_calls` table _(new)_: model, input/output/cached tokens, latency, cost, purpose for
       every call; a small usage panel in the UI
-- [ ] `prompt_version` _(new)_ stored with every extraction, next to the model, so evals can
+- [x] `prompt_version` _(new)_ stored with every extraction, next to the model, so evals can
       compare versions
 - [ ] Cache by content _(new)_: same sha256 + prompt version + model → no second call
 - [ ] Model routing _(new)_: Haiku first, Sonnet for low-confidence results; F6 must show
