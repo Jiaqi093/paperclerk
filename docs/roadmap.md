@@ -93,7 +93,9 @@ they need labels and F2 predictions.
 - [ ] Public sets scored separately _(new)_: 60 SROIE receipts sampled (scans, Malaysia;
       company, date and total annotated). DocILE needs an access token. Still to build:
       fields a set doesn't annotate go unscored, one scorecard per set
-- [ ] Predictions: run F2 over the labelled documents into `predictions.jsonl` (needs F2)
+- [x] Predictions: `evals/predict.py` runs F2 over the labelled documents into
+      `predictions.jsonl` (model, vision model and effort can be overridden to compare
+      configs; reads are cached in `evals/data/.eval-cache.sqlite`, so re-scoring is free)
 - [ ] Synthetic dataset _(new)_: generated invoices, receipts and renewal emails (PDF and image)
       that can be published, so results are reproducible. Real documents stay a private
       supplement in `evals/data/`.
@@ -145,17 +147,25 @@ first real numbers.
       one the user verified, else the newest whose checks still hold. A change in a document's
       text makes its reads stale (verified ones stay), so it's read again. A failed read is
       tried once more on the next run, then waits for review. A new prompt or model doesn't
-      re-read documents already read: that's a deliberate re-read (to do: a command for it).
+      re-read documents already read: that's a deliberate re-read (to do: a command for it,
+      with a way to skip the cache).
 - [ ] Review queue in the web UI: confirm or correct fields; corrected rows marked
       `human_verified`
-- [ ] `llm_calls` table _(new)_: model, input/output/cached tokens, latency, cost, purpose for
-      every call; a small usage panel in the UI
+- [x] `llm_calls` table _(new)_: model, input/output/cached tokens, latency, cost, purpose
+      (read / retry / stronger model / second read) for every call; `paperclerk usage` sums it
+      per day and model. Still to do: a small usage panel in the UI.
+- [x] Spending guard _(new)_: `paperclerk extract` estimates the cost first (on the high side)
+      and asks above `llm.confirm_above_usd` ($10); `llm.monthly_budget_usd` stops a run before
+      it would pass the month's budget.
 - [x] `prompt_version` _(new)_ stored with every extraction, next to the model, so evals can
       compare versions
-- [ ] Cache by content _(new)_: same sha256 + prompt version + model → no second call
+- [x] Cache by content _(new)_: same content + pages + prompt version + models + effort → the
+      earlier read is reused, no call (`extract/cache.py`). Kept forever; failed reads aren't
+      cached.
 - [ ] Model routing _(new)_: Haiku first, Sonnet for low-confidence results; F6 must show
       accuracy holds
-- [ ] Prompt caching for the fixed system prompt _(new)_
+- [x] Prompt caching for the fixed system prompt _(new)_ (`cache_control` on the system
+      prompt; the call log shows cached input tokens, to confirm on the first real run)
 - [ ] Background jobs _(new)_: scan and extraction run off the request thread; the API returns a
       job id, the UI shows progress; rate limits and retries handled
 - [ ] Batch API for the first bulk import _(new, optional)_

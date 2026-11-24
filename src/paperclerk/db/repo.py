@@ -375,3 +375,57 @@ def review_queue(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                  "reasons": [f"no answer from the model ({last['error']})"]}
             )  # fmt: skip
     return queue
+
+
+# ---- F2: model calls ----------------------------------------------------------------------
+
+
+def insert_llm_calls(
+    conn: sqlite3.Connection, document_id: int | None, result: Any, *, commit: bool = True
+) -> None:
+    """One row per attempt in an ExtractionResult (none for a cached one)."""
+    from paperclerk.extract.classifier import attempt_purpose
+
+    for i, a in enumerate(result.attempts):
+        u = a.usage
+        conn.execute(
+            "INSERT INTO llm_calls (document_id, purpose, asked_model, model, prompt_version, "
+            "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, "
+            "cost_usd, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                document_id, attempt_purpose(result, i), a.asked, a.model, result.prompt_version,
+                u.input_tokens if u else None, u.output_tokens if u else None,
+                u.cache_read_tokens if u else None, u.cache_write_tokens if u else None,
+                a.latency_ms, a.cost_usd, a.error, _now(),
+            ),
+        )  # fmt: skip
+    if commit:
+        conn.commit()
+
+
+def month_start() -> str:
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    return f"{now:%Y-%m}-01 00:00:00"
+
+
+def spent_since(conn: sqlite3.Connection, since: str) -> float:
+    return conn.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE created_at >= ?", (since,)
+    ).fetchone()[0]
+
+
+def usage_summary(conn: sqlite3.Connection, since: str) -> list[dict[str, Any]]:
+    """Calls and cost per day and model since `since` (UTC), newest day first."""
+    rows = conn.execute(
+        "SELECT substr(created_at, 1, 10) AS day, asked_model AS model, COUNT(*) AS calls, "
+        "SUM(error IS NOT NULL) AS failed, COALESCE(SUM(cost_usd), 0) AS cost_usd, "
+        "COALESCE(SUM(input_tokens), 0) AS input_tokens, "
+        "COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens, "
+        "COALESCE(SUM(output_tokens), 0) AS output_tokens "
+        "FROM llm_calls WHERE created_at >= ? GROUP BY day, asked_model "
+        "ORDER BY day DESC, cost_usd DESC",
+        (since,),
+    ).fetchall()
+    return [dict(r) for r in rows]

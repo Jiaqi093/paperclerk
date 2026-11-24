@@ -66,10 +66,47 @@ class ExtractionResult:
     unread: tuple[str, ...]  # parts of the document the model wasn't shown (see inputs.py)
     problems: tuple[verify.Problem, ...] = ()  # the kept answer's source/evidence problems
     answered_by: str | None = None  # the model asked for the kept answer
+    cached: bool = False  # reused from an earlier identical read: no calls, no cost
+    # For a cached result: what the original read cost and took (evals report the cost of a
+    # read, not of this run). None otherwise.
+    original_cost_usd: float | None = None
+    original_latency_ms: int | None = None
 
     @property
     def failed(self) -> bool:
         return self.extraction is None
+
+    def to_json(self) -> str:
+        """The answer and its checks, for the cache. Attempts aren't kept: a reuse costs
+        nothing, and the calls that produced it are in llm_calls."""
+        import json
+
+        return json.dumps(
+            {
+                "extraction": self.extraction.model_dump(mode="json") if self.extraction else None,
+                "requested_model": self.requested_model,
+                "model": self.model,
+                "prompt_version": self.prompt_version,
+                "unread": list(self.unread),
+                "problems": [[p.field, p.what, p.scanned] for p in self.problems],
+                "answered_by": self.answered_by,
+                "cost_usd": self.cost_usd if not self.cached else self.original_cost_usd,
+                "latency_ms": self.latency_ms if not self.cached else self.original_latency_ms,
+            }
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> ExtractionResult:
+        import json
+
+        d = json.loads(text)
+        extraction = Extraction.model_validate(d["extraction"]) if d["extraction"] else None
+        return cls(
+            extraction, d["requested_model"], d["model"], d["prompt_version"], (),
+            tuple(d["unread"]), tuple(verify.Problem(*p) for p in d["problems"]),
+            d["answered_by"], cached=True, original_cost_usd=d.get("cost_usd"),
+            original_latency_ms=d.get("latency_ms"),
+        )  # fmt: skip
 
     @property
     def fell_back(self) -> bool:
@@ -232,3 +269,16 @@ def _disagreements(
         elif a is not None and b is not None and not verify.same_value(f, a, b):
             found.append(verify.Problem(f, "the two reads disagree"))
     return found
+
+
+def attempt_purpose(result: ExtractionResult, index: int) -> str:
+    """Why attempt `index` was made, for the call log: read, retry, stronger model, second
+    read."""
+    attempt = result.attempts[index]
+    if attempt.second_read:
+        return "second read"
+    if index == 0:
+        return "read"
+    if attempt.asked == result.attempts[0].asked:
+        return "retry"
+    return "stronger model"
