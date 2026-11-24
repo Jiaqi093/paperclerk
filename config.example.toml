@@ -14,5 +14,7 @@ provider = "anthropic"
 model = "claude-sonnet-5-5"
 # Thinking effort: low, medium, high, xhigh or max. Leave out for the model's default.
 # effort = "low"
+# Model for documents with scanned pages (reading images is harder). "" = use `model`.
+vision_model = "claude-opus-5-5"
 # Extractions below this confidence go to the human review queue.
 review_threshold = 0.8

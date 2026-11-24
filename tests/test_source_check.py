@@ -66,7 +66,7 @@ def test_amount_cents():
         "Pay by 5th November, 2026",
         "November 5, 2026",
         "05-Nov-2026",
-        "will be debited on 5 Nov",  # no year printed
+        "Issued 17 Oct 2026. Will be debited on 5 Nov",  # year printed elsewhere
     ],
 )
 def test_date_found_in_printed_forms(text):
@@ -199,3 +199,25 @@ def test_review_edge_cases():
     assert normalize_vendor("Jack’s/B&Q") == normalize_vendor("Jack's/B&Q")
     assert not amount_in_text(80.0, "speed 80.00 m.p.h.")
     assert not amount_in_text(90.0, "paper 90.00 g.s.m.")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "will be debited on 5 Nov",  # no year anywhere: the year would be a guess
+        "Billing period 5 Nov to 4 Dec 2025, issued 10 Dec 2026",  # two years: either one
+        "Issued 17 Oct 2027. Will be debited on 5 Nov",  # another year
+    ],
+)
+def test_yearless_date_needs_the_year_printed_and_only_that_one(text):
+    assert not date_in_text(date(2026, 11, 5), text)
+
+
+def test_may_without_a_year_is_not_a_date():
+    assert not date_in_text(date(2027, 5, 5), "Late fees of 5 may apply. Issued 1 Apr 2027")
+    assert date_in_text(date(2027, 5, 5), "Due 5 May 2027")
+
+
+def test_postcode_is_not_a_year():
+    text = "Sydney NSW 2000\nIssued 17 Oct 2026. Will be debited on 5 Nov"
+    assert date_in_text(date(2026, 11, 5), text)

@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 
 from paperclerk.evals.data import Label, Prediction
 from paperclerk.evals.judge import SCORED_FIELDS, Outcome, judge_field, key_fields
-from paperclerk.extract.source_check import normalize_vendor, unsupported_fields
+from paperclerk.extract import verify
+from paperclerk.extract.source_check import normalize_vendor
 
 # Confidence bands for the calibration table: lower bound inclusive.
 CALIBRATION_BANDS = (0.0, 0.5, 0.7, 0.8, 0.9, 0.95)
@@ -66,9 +67,9 @@ def judge_document(
     reasons = []
     if out.confidence < threshold:
         reasons.append(f"confidence {out.confidence:.2f}")
-    missing = unsupported_fields(out, text)
-    if missing:
-        reasons.append("not in document: " + ", ".join(missing))
+    # The same check F2 runs before anything enters the library (company, amount and dates
+    # written in the document, each quoted from it), so the red line here is the real one.
+    reasons.extend(str(problem) for problem in verify.check(out, text))
     return DocResult(label, prediction, outcomes, fully_correct, bool(reasons), tuple(reasons))
 
 
