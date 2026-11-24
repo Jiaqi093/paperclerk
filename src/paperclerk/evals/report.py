@@ -126,8 +126,8 @@ def render(report: Report, previous: dict | None = None) -> str:
     r = report.review()
     lines += [
         "",
-        f"Review queue (confidence below {report.threshold:.2f}, or a value not in the document)",
-        "  the source check is modelled here; F2 must run the same check for this to hold",
+        f"Review queue (confidence below {report.threshold:.2f}, or a value not in the document"
+        " or not quoted from it: the same check F2 runs)",
         f"  sent to review: {r['reviewed']}, of which wrong: {r['reviewed_wrong']}",
         f"  wrong: {r['wrong']}, of which caught: {r['wrong_caught']},"
         f" went into the library: {r['wrong'] - r['wrong_caught']}",

@@ -155,7 +155,7 @@ first real numbers.
       (read / retry / stronger model / second read) for every call; `paperclerk usage` sums it
       per day and model. Still to do: a small usage panel in the UI.
 - [x] Spending guard _(new)_: `paperclerk extract` estimates the cost first (on the high side)
-      and asks above `llm.confirm_above_usd` ($10); `llm.monthly_budget_usd` stops a run before
+      and asks above `llm.confirm_above_usd` ($1); `llm.monthly_budget_usd` stops a run before
       it would pass the month's budget.
 - [x] `prompt_version` _(new)_ stored with every extraction, next to the model, so evals can
       compare versions
