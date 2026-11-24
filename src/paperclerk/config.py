@@ -16,6 +16,9 @@ class LLMSettings(BaseModel):
     # How much the model thinks before answering: low, medium, high, xhigh, max. Unset: the
     # model's own default. Chosen from eval results.
     effort: Effort | None = None
+    # Reads documents with scanned pages (images are harder to read). "" turns it off: `model`
+    # reads them too.
+    vision_model: str | None = "claude-opus-5-5"
     review_threshold: float = Field(0.8, ge=0.0, le=1.0)
 
 

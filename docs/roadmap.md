@@ -122,13 +122,20 @@ first real numbers.
 - [x] Model input (`extract/inputs.py`): pages with text go as text only; pages flagged
       `needs_vision` go as JPEG images (PDF pages rendered with pypdfium2, photos turned upright,
       DOCX scans as their embedded pictures), long edge 2000 px. The whole document is sent,
-      never cut for length; only what one request can carry (context window, 600 images, 128 MB) can leave pages
-      out, and then the document goes to review. The file name is sent as a hint only (no
+      never cut for length; only what one request can carry (context window, 600 images,
+      128 MB) can leave pages out, and then the document goes to review. The file name is sent as a hint only (no
       folders); document text is wrapped as data and can't close its own tags.
-- [ ] Source check (`extract/source_check.py` written and used by F6; wire it into F2): company,
-      amount and dates must appear in the document's text, otherwise
-      the document goes to review (keeps fabricated values out of the library; scanned pages
-      have no text to check against, to be decided)
+- [x] Source and evidence check (`extract/verify.py`): every company, amount and date must be
+      written in the document and quoted from it (the quote really in the document, showing
+      that value); any problem sends the document to review. F6 runs the same check, so its
+      red line is the real one. A failed check gets one more read by the next stronger model,
+      kept if it is no worse (a value left out counts against it); values the two reads
+      disagree on go to review whichever is kept. Values from scanned pages can't be checked
+      yet: those documents go to review (next: on-device text recognition).
+- [x] Documents with scanned pages are read by `llm.vision_model` (default Opus 5.5).
+- [ ] On-device text recognition for scans (macOS Vision, free, nothing leaves the machine): the
+      recognised text lets the source and evidence check run on scanned pages too, so most scans
+      no longer need review. The model's confidence alone never lets a scan skip review.
 - [ ] Results in `extractions`; low confidence goes to the review queue
 - [ ] Review queue in the web UI: confirm or correct fields; corrected rows marked
       `human_verified`

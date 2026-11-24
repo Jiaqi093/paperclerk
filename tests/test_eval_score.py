@@ -7,7 +7,8 @@ from paperclerk.evals.data import DataError, Label, Prediction, load_labels, rea
 from paperclerk.evals.judge import Outcome, judge_field, key_fields
 from paperclerk.evals.report import load_history, previous_run, render, save_run, verdict
 from paperclerk.evals.score import score
-from paperclerk.extract.schemas import DocType, Extraction
+from paperclerk.extract import verify
+from paperclerk.extract.schemas import DocType, Evidence, Extraction
 
 BILL = "Origin Energy\nThis period $214.37\nOverdue $50.00\nTotal due $264.37\nDue 24 Oct 2026"
 PROMO = "Big Sale at Harvey Norman! Was $99, now $49.99. Ends 30 Nov 2026."
@@ -25,8 +26,21 @@ def bill_label(**kw) -> Label:
     return Label.model_validate({**values, **kw})
 
 
-def answer(file: str, confidence: float = 0.95, **kw) -> Prediction:
+def _honest_quotes(out: Extraction) -> dict:
+    """What a model that quotes faithfully would give: the first line showing each value."""
+    lines = (BILL + "\n" + PROMO).splitlines()
+    quotes = {}
+    for field in ("vendor", "amount", "issue_date", "due_date"):
+        value = getattr(out, field)
+        if value is not None:
+            quotes[field] = next((ln for ln in lines if verify._shows(field, value, ln)), None)
+    return quotes
+
+
+def answer(file: str, confidence: float = 0.95, evidence=None, **kw) -> Prediction:
     out = Extraction(doc_type=DocType.INVOICE, confidence=confidence, **kw)
+    quotes = _honest_quotes(out) if evidence is None else evidence
+    out = out.model_copy(update={"evidence": Evidence(**quotes)})
     return Prediction(file=file, output=out, cost_usd=0.002, latency_ms=1200)
 
 
@@ -125,7 +139,21 @@ def test_value_not_in_document_goes_to_review_whatever_the_confidence():
     pred = answer("bill.txt", confidence=0.99, **{**GOOD, "amount": 246.37})
     r = score([bill_label()], [pred], {"bill.txt": BILL}, 0.8)
     assert r.fabrications == 1 and r.red_line_ok  # the source check stopped it
-    assert r.docs[0].review_reasons == ("not in document: amount",)
+    assert r.docs[0].review_reasons == ("amount: not in the document",)
+
+
+def test_made_up_quote_goes_to_review_even_when_the_value_is_there():
+    quotes = {
+        "vendor": "Origin Energy",
+        "amount": "Amount payable $264.37",
+        "due_date": "Due 24 Oct 2026",
+    }
+    pred = answer("bill.txt", confidence=0.99, evidence=quotes, **GOOD)
+    r = score([bill_label()], [pred], {"bill.txt": BILL}, 0.8)
+    assert r.docs[0].review_reasons == ("amount: quote not in the document",)
+    pred = answer("bill.txt", confidence=0.99, evidence={}, **GOOD)  # no quotes at all
+    r = score([bill_label()], [pred], {"bill.txt": BILL}, 0.8)
+    assert len(r.docs[0].review_reasons) == 3
 
 
 def test_failed_call_counts_as_wrong_but_not_fabricated():

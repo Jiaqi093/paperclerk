@@ -142,7 +142,8 @@ _MONTHS = [
 ]
 
 
-def _date_pattern(d: date) -> re.Pattern[str]:
+def _date_patterns(d: date) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """(forms with the year, forms without it)."""
     # The lookaheads stop a shorter match inside a longer word or number: "nov" inside
     # "November 2026", "25" inside "25th, 2026". Without them the year-less forms below would
     # accept a date printed with a different year.
@@ -157,19 +158,47 @@ def _date_pattern(d: date) -> re.Pattern[str]:
         rf"0?{d.day}{sep}{month_num}{sep}{year}",  # 25/11/2026, 25.11.26
         rf"{day}(?:\s+of)?[\s\-]*{month_name}[\s\-,]*{year}",  # 25 Nov 2026, 25-Nov-26
         rf"{month_name}\s*{day}[\s,]*{year}",  # November 25, 2026
-        # No year printed ("debited on 25 Nov"): matches unless a year follows.
-        rf"{day}(?:\s+of)?[\s\-]*{month_name}{no_year_after}",
-        rf"{month_name}\s*{day}{no_year_after}",
     ]
     if d.day > 12:
         # US order only when it can't be a day/month swap: 11/25/2026 is unambiguous, while
         # 05/11/2026 would let a misread 11 May pass for 5 Nov.
         forms.append(rf"{month_num}{sep}0?{d.day}{sep}{year}")
-    return re.compile(r"(?<![\d])(?:" + "|".join(forms) + r")(?![\d])", re.IGNORECASE)
+    # No year printed ("debited on 25 Nov"): matches unless a year follows. Never for May:
+    # "5 may apply" is not a date.
+    yearless = []
+    if d.month != 5:
+        yearless = [
+            rf"{day}(?:\s+of)?[\s\-]*{month_name}{no_year_after}",
+            rf"{month_name}\s*{day}{no_year_after}",
+        ]
+    wrap = r"(?<![\d])(?:{})(?![\d])"
+    full = re.compile(wrap.format("|".join(forms)), re.IGNORECASE)
+    partial = re.compile(wrap.format("|".join(yearless) or "(?!)"), re.IGNORECASE)
+    return full, partial
 
 
-def date_in_text(d: date, text: str) -> bool:
-    return _date_pattern(d).search(unicodedata.normalize("NFKC", text)) is not None
+# A year as printed. Not a postcode after an Australian state ("Sydney NSW 2000").
+_YEAR = re.compile(r"(?<!\d)(?<!NSW )(?<!ACT )(?<!VIC )(?<!QLD )(?:19|20)\d{2}(?!\d)")
+
+
+def years_in(text: str) -> set[int]:
+    return {int(y) for y in _YEAR.findall(unicodedata.normalize("NFKC", text))}
+
+
+def date_in_text(d: date, text: str, *, document: str | None = None) -> bool:
+    """The date as printed, with its year. A date printed without a year ("debited on 5 Nov")
+    only counts when the document prints that year and no other: a bill issued in 2026 with
+    "debited on 5 Nov" is 5 Nov 2026, but "25 Nov to 24 Dec 2025" on a 2026 bill could be
+    either year, so it doesn't count. Without any year printed, the year is a guess.
+
+    `document`: when `text` is a quote from a document, the document whose years decide."""
+    text = unicodedata.normalize("NFKC", text)
+    full, partial = _date_patterns(d)
+    if full.search(text):
+        return True
+    if partial.search(text):
+        return years_in(text if document is None else document) == {d.year}
+    return False
 
 
 def unsupported_fields(extraction: Extraction, text: str) -> list[str]:
