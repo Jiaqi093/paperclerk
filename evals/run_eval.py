@@ -10,6 +10,7 @@ evals/labeling-guide.md.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +21,20 @@ from paperclerk.evals.score import score
 
 EVALS = Path(__file__).parent
 MAX_MISSING = 0.1  # share of labelled documents allowed to have no prediction at all
+
+
+def _set_name(args: argparse.Namespace) -> str | None:
+    """The label set's name for the committed results: --set, or the folder under evals/data/
+    the labels are in. Never another folder's name (it could be personal), never free text
+    that could break the table."""
+    name = args.set
+    if name is None:
+        data = (EVALS / "data").resolve()
+        parent = args.labels.resolve().parent
+        name = parent.name if parent.parent == data else None
+    if name is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", name):
+        sys.exit(f"--set must be a short name (letters, digits, - or _), not {name!r}")
+    return name
 
 
 def main() -> None:
@@ -34,6 +49,7 @@ def main() -> None:
     )
     ap.add_argument("--config", type=Path, default=Path("config.toml"))
     ap.add_argument("--save", action="store_true", help="append totals to evals/results.md")
+    ap.add_argument("--set", help="name of the label set in results.md (default: its folder)")
     args = ap.parse_args()
 
     threshold = args.threshold
@@ -63,7 +79,7 @@ def main() -> None:
     previous = previous_run(load_history(history_path), report.fingerprint)
     print(render(report, previous))
     if args.save:
-        save_run(report, history_path, EVALS / "results.md")
+        save_run(report, history_path, EVALS / "results.md", data_set=_set_name(args))
         print(f"\nsaved to {EVALS / 'results.md'}")
     if not report.red_line_ok:
         sys.exit(1)

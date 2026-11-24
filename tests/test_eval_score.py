@@ -275,9 +275,10 @@ def test_verdict_order():
 def test_history_keeps_totals_only_and_compares_same_labels(tmp_path):
     r = score([bill_label()], [answer("bill.txt", **GOOD)], {"bill.txt": BILL}, 0.8)
     jsonl, md = tmp_path / "results.jsonl", tmp_path / "results.md"
-    save_run(r, jsonl, md, today=date(2026, 11, 22))
+    save_run(r, jsonl, md, today=date(2026, 11, 22), data_set="real")
     history = load_history(jsonl)
     assert "bill.txt" not in jsonl.read_text() and "bill.txt" not in md.read_text()
     assert previous_run(history, r.fingerprint)["fully_correct"] == 1
     assert previous_run(history, "other-labels") is None
-    assert "| 2026-11-22 |" in md.read_text()
+    assert "| 2026-11-22 | real |" in md.read_text()
+    assert "| 0/1 |" in md.read_text()  # sent to review
