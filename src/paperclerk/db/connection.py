@@ -54,6 +54,33 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     # 5: version of the parser that produced the outcome (Parser.version; NULL = 0, i.e.
     #    before versions existed), so bumping a parser's version re-parses its file type.
     ("ALTER TABLE documents ADD COLUMN parser_version INTEGER",),
+    # 6: F2 results. Every read of a document is kept (history); the current answer is the
+    #    newest one the user verified, else the newest one not made stale by a change in the
+    #    document's text. A read that got no answer goes to extraction_failures: a document is
+    #    tried again once on the next run, then left for review.
+    (
+        "ALTER TABLE extractions ADD COLUMN prompt_version TEXT",
+        "ALTER TABLE extractions ADD COLUMN evidence_json TEXT",
+        # JSON list of reasons the document needs review; [] when it entered the library.
+        "ALTER TABLE extractions ADD COLUMN review_reasons TEXT NOT NULL DEFAULT '[]'",
+        # The document's text changed after this read (a newer parser), so its checks no
+        # longer hold. Never set on a row the user verified.
+        "ALTER TABLE extractions ADD COLUMN stale INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE extractions ADD COLUMN cost_usd REAL",
+        """CREATE TABLE extraction_failures (
+            id             INTEGER PRIMARY KEY,
+            document_id    INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            model          TEXT    NOT NULL,       -- the model meant for the document
+            prompt_version TEXT    NOT NULL,
+            error          TEXT    NOT NULL,       -- the last attempt's error
+            cost_usd       REAL,                   -- what the failed attempts cost
+            stale          INTEGER NOT NULL DEFAULT 0,  -- of text the document no longer has
+            created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX idx_extraction_failures_document ON extraction_failures(document_id)",
+        # Answers from before these checks existed were never checked: read them again.
+        "UPDATE extractions SET stale = 1 WHERE human_verified = 0",
+    ),
 )
 
 

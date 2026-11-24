@@ -7,6 +7,7 @@ import hashlib
 import logging
 import sqlite3
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from paperclerk.ingest.scanner import (
     no_cloud_downloads,
     sha256_file,
 )
+from paperclerk.llm.base import LLMClient
 
 log = logging.getLogger(__name__)
 
@@ -120,8 +122,55 @@ class _Parsed:
     version: int | None = None  # Parser.version that produced this outcome
 
 
+class ExtractionInProgress(RuntimeError):
+    """Another run of classify_pending is reading documents."""
+
+
+@dataclass
+class ExtractRunResult:
+    read: int = 0  # documents sent to the model
+    accepted: int = 0  # entered the library
+    review: int = 0  # answered, waiting for a person
+    failed: int = 0  # no answer (tried again once on the next run)
+    skipped: list[str] = field(default_factory=list)  # file gone or changed: rescan first
+    cost_usd: float = 0.0
+
+
+def _read_content(paths: list[str], sha256: str) -> bytes | None:
+    """The bytes of the first path that still holds the content with this hash. Never
+    downloads a cloud-only file (the read fails instead, as in a scan)."""
+    for path in paths:
+        try:
+            p = Path(path)
+            if p.stat().st_size > MAX_PARSE_BYTES:
+                continue
+            with no_cloud_downloads():
+                data = p.read_bytes()
+        except OSError:
+            continue
+        if hashlib.sha256(data).hexdigest() == sha256:
+            return data
+    return None
+
+
+def _pages_marker(pages: list[Page]) -> str:
+    """Identifies a document's pages, so an answer read from them is only stored as current if
+    they are still the same when it is stored."""
+    h = hashlib.sha256()
+    for page in pages:
+        h.update(f"{int(page.needs_vision)}:{len(page.text)}:".encode())
+        h.update(page.text.encode())
+    return h.hexdigest()
+
+
 class PaperClerk:
-    def __init__(self, settings: Settings, conn: sqlite3.Connection | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        conn: sqlite3.Connection | None = None,
+        *,
+        client_for: Callable[[str], LLMClient] | None = None,
+    ) -> None:
         self.settings = settings
         self.conn = conn or connect(settings.db_path)
         init_db(self.conn)
@@ -131,6 +180,10 @@ class PaperClerk:
         # One scan at a time. A scan takes the database lock per file, not for the whole scan,
         # so the API keeps answering (the document list fills in) while a long scan runs.
         self._scan_lock = threading.Lock()
+        self._extract_lock = threading.Lock()
+        if client_for is None:
+            from paperclerk.llm.anthropic_client import client_for
+        self._client_for = client_for
 
     # ---- F1: ingest -------------------------------------------------------------------------
     def scan(self) -> ScanResult:
@@ -261,10 +314,10 @@ class PaperClerk:
             if self._same_outcome(known, parsed):
                 repo.set_parser_version(self.conn, doc_id, parsed.version)
             else:
-                # TODO(F2): the text changed under existing extractions: mark them stale (never
-                # overwrite human_verified fields) so they're re-extracted or reviewed.
+                # The text changed under existing answers: their checks no longer hold, so
+                # they're read again (an answer the user verified stays).
                 result.updated += 1
-                repo.set_parse_result(self.conn, doc_id, **_fields(parsed))
+                repo.set_parse_result(self.conn, doc_id, **_fields(parsed), stale_reads=True)
             return
         existing = repo.get_document_by_sha(self.conn, content.sha256)
         if existing is not None and existing["parse_status"] in (repo.PARSE_OK, repo.PARSE_FAILED):
@@ -329,8 +382,143 @@ class PaperClerk:
             return repo.list_documents(self.conn, limit=limit)
 
     # ---- F2: classify / extract ---------------------------------------------------------------
-    def classify_pending(self) -> int:
-        raise NotImplementedError("F2: not implemented yet")
+    def classify_pending(self, limit: int | None = None) -> ExtractRunResult:
+        """Read every document that has no current answer (repo.documents_to_extract), check
+        each answer, and store it: in the library, or waiting for review with its reasons.
+
+        A failed read is stored as a failure; the document is tried once more on the next run,
+        then waits in the review queue. Model calls run without the database lock, so the API
+        stays responsive. Documents already read aren't re-read when the prompt or the model
+        changes: that's a separate, deliberate re-read.
+        """
+        if not self._extract_lock.acquire(blocking=False):
+            raise ExtractionInProgress("documents are already being read")
+        try:
+            return self._classify_pending(limit)
+        finally:
+            self._extract_lock.release()
+
+    def _classify_pending(self, limit: int | None) -> ExtractRunResult:
+        result = ExtractRunResult()
+        with self._db_lock:
+            pending = repo.documents_to_extract(self.conn, limit)
+        for doc_id in pending:
+            try:
+                self._classify_one(doc_id, result)
+            except sqlite3.Error:  # storing failed (locked, disk full): next run tries again
+                log.exception("couldn't store the answer for document %s", doc_id)
+                with self._db_lock:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                result.skipped.append(f"document {doc_id}: couldn't be stored")
+        return result
+
+    def _classify_one(self, doc_id: int, result: ExtractRunResult) -> None:
+        from paperclerk.extract.classifier import extract
+        from paperclerk.extract.review import review_reasons
+        from paperclerk.ingest.parsers.base import ParsedDocument
+
+        llm = self.settings.llm
+        with self._db_lock:
+            row = self.conn.execute(
+                "SELECT sha256, mime_type, source FROM documents WHERE id = ?", (doc_id,)
+            ).fetchone()
+            pages = repo.get_pages(self.conn, doc_id)
+            paths = [
+                r[0]
+                for r in self.conn.execute(
+                    "SELECT path FROM document_paths WHERE document_id = ? ORDER BY path",
+                    (doc_id,),
+                )
+            ]
+        marker = _pages_marker(pages)
+        doc = ParsedDocument(row["mime_type"] or "", tuple(pages))
+        name = Path(paths[0]).name if paths else ""
+        data = b""
+        if doc.needs_vision:
+            # Images are made from the file itself, so it must still hold this content.
+            found = _read_content(paths, row["sha256"])
+            if found is None and paths:
+                result.skipped.append(f"{paths[0]}: changed or unavailable; scan first")
+                return
+            if found is None:  # not a local file (F3 sources): nothing to make images from
+                with self._db_lock:
+                    repo.insert_failure(
+                        self.conn, doc_id, model=llm.model, prompt_version="",
+                        error=f"no local file to read the scanned pages from ({row['source']})",
+                        cost_usd=None,
+                    )  # fmt: skip
+                result.failed += 1
+                return
+            data = found
+
+        answer, error = None, None
+        try:
+            answer = extract(
+                doc,
+                data,
+                name,
+                model=llm.model,
+                vision_model=llm.vision_model or None,
+                effort=llm.effort,
+                client_for=self._client_for,
+            )
+        except Exception as e:  # one document's trouble never stops the run
+            log.exception("extraction failed for document %s", doc_id)
+            error = f"{type(e).__name__}: {e}"[:300]
+        result.read += 1
+        if answer is not None and answer.cost_usd is not None:
+            result.cost_usd += answer.cost_usd
+
+        with self._db_lock:
+            # The model read these pages without the lock held: if a scan changed them since,
+            # the answer was checked against text the document no longer has. Store it as
+            # history (stale), so the document stays due and is read again. The write lock is
+            # taken first, so another process can't change the pages between check and store.
+            if not self.conn.in_transaction:
+                self.conn.execute("BEGIN IMMEDIATE")
+            current = self.conn.execute(
+                "SELECT parse_status FROM documents WHERE id = ?", (doc_id,)
+            ).fetchone()
+            still_same = (
+                current is not None
+                and current["parse_status"] == repo.PARSE_OK
+                and _pages_marker(repo.get_pages(self.conn, doc_id)) == marker
+            )
+            if answer is None or answer.failed:
+                if answer is not None:
+                    error = answer.attempts[-1].error if answer.attempts else "not tried"
+                repo.insert_failure(
+                    self.conn, doc_id,
+                    model=answer.requested_model if answer else llm.model,
+                    prompt_version=answer.prompt_version if answer else "",
+                    error=error or "unknown",
+                    cost_usd=answer.cost_usd if answer else None,
+                    stale=not still_same,
+                )  # fmt: skip
+                result.failed += 1
+                return
+            reasons = review_reasons(answer, llm.review_threshold)
+            ex = answer.extraction
+            repo.insert_extraction(
+                self.conn, doc_id, ex.model_dump(mode="json"),
+                model=answer.model, prompt_version=answer.prompt_version,
+                review_reasons=reasons,
+                evidence_json=ex.evidence.model_dump_json() if ex.evidence else None,
+                raw_json=ex.model_dump_json(),
+                cost_usd=answer.cost_usd,
+                stale=not still_same,
+            )  # fmt: skip
+        if not still_same:
+            result.skipped.append(f"document {doc_id}: changed while it was read; read again")
+        elif reasons:
+            result.review += 1
+        else:
+            result.accepted += 1
+
+    def review_queue(self) -> list[dict[str, Any]]:
+        with self._db_lock:
+            return repo.review_queue(self.conn)
 
     # ---- F4: organize -------------------------------------------------------------------------
     def propose_plan(self) -> Any:

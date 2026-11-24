@@ -45,6 +45,33 @@ def docs(limit: int = 20, config: Path = ConfigOpt) -> None:
 
 
 @app.command()
+def extract(
+    limit: int = typer.Option(None, help="Read at most this many documents"),
+    config: Path = ConfigOpt,
+) -> None:
+    """Read new documents with the model (this calls the API and costs money)."""
+    r = _clerk(config).classify_pending(limit=limit)
+    typer.echo(
+        f"read={r.read} library={r.accepted} review={r.review} failed={r.failed} "
+        f"skipped={len(r.skipped)} cost=${r.cost_usd:.4f}"
+    )
+    for path in r.skipped:
+        typer.echo(f"  skipped: {path} (file changed or gone; scan first)", err=True)
+
+
+@app.command()
+def review(config: Path = ConfigOpt) -> None:
+    """List documents waiting for you, with the reasons."""
+    for item in _clerk(config).review_queue():
+        what = " ".join(
+            str(item[k]) for k in ("doc_type", "vendor", "amount", "due_date") if item.get(k)
+        )
+        typer.echo(f"{item['document_id']:>5}  {what or '(no answer)'}")
+        for reason in item["reasons"]:
+            typer.echo(f"         - {reason}")
+
+
+@app.command()
 def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
     """Run the FastAPI backend for the web UI."""
     import uvicorn
