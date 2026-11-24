@@ -110,9 +110,15 @@ first real numbers.
 
 ## F2 — Classification and extraction
 
-- [ ] `AnthropicClient.structured()`: forced tool call, Pydantic validation, one retry on failure
-- [ ] Classification prompt (`src/paperclerk/extract/prompts/classify.md`); `needs_vision` documents and images go
-      through vision
+- [x] `AnthropicClient.structured()`: structured output (`output_config.format`; current models
+      reject forced tool calls), stop reason checked before the answer is read, usage and cost
+      kept for every call, refused and cut-off ones included. Model and effort set in config.
+- [x] Failure rule: retry once on the same model, then once on the next stronger one (Haiku →
+      Sonnet → Opus); still failing → failed call, sent to review. Requests the API rejects as
+      malformed aren't retried.
+- [x] Prompt = sections 1-5 of the labeling guide word for word (a test guards drift) plus how
+      to read the input and answer; the model quotes the document for each company, amount and
+      date (`evidence`). `prompt_version` hashes prompt, answer schema and markup.
 - [x] Model input (`extract/inputs.py`): pages with text go as text only; pages flagged
       `needs_vision` go as JPEG images (PDF pages rendered with pypdfium2, photos turned upright,
       DOCX scans as their embedded pictures), long edge 2000 px. The whole document is sent,

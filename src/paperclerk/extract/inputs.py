@@ -52,6 +52,9 @@ IMAGE_PATCH = 28
 Image.MAX_IMAGE_PIXELS = 300_000_000
 MAX_NON_JPEG_PIXELS = 100_000_000
 
+# Bump when the markup below changes: it is part of the prompt version.
+MARKUP_VERSION = 1
+
 _TAGS = ("document", "page", "file_name")
 _TAG_LOOKALIKE = re.compile(r"<(\s*/*\s*(?:" + "|".join(_TAGS) + r")\b)", re.IGNORECASE)
 _W_DEL = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}del"

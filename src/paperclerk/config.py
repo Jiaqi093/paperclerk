@@ -7,10 +7,15 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
 
+from paperclerk.llm.base import Effort
+
 
 class LLMSettings(BaseModel):
     provider: str = "anthropic"
     model: str = "claude-sonnet-5-5"
+    # How much the model thinks before answering: low, medium, high, xhigh, max. Unset: the
+    # model's own default. Chosen from eval results.
+    effort: Effort | None = None
     review_threshold: float = Field(0.8, ge=0.0, le=1.0)
 
 
