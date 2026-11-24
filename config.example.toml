@@ -12,5 +12,7 @@ db_path = "~/.paperclerk/paperclerk.db"
 [llm]
 provider = "anthropic"
 model = "claude-sonnet-5-5"
+# Thinking effort: low, medium, high, xhigh or max. Leave out for the model's default.
+# effort = "low"
 # Extractions below this confidence go to the human review queue.
 review_threshold = 0.8
