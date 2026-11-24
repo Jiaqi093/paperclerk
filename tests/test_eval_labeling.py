@@ -131,3 +131,20 @@ def test_run_eval_stops_when_predictions_dont_match_labels(tmp_path):
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert result.returncode != 0
     assert "have no prediction" in result.stderr
+
+
+def test_saved_set_name_is_never_a_private_folder(tmp_path):
+    import argparse
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("run_eval", ROOT / "evals" / "run_eval.py")
+    run_eval = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run_eval)
+    ns = argparse.Namespace
+    data = ROOT / "evals" / "data"
+    assert run_eval._set_name(ns(set=None, labels=data / "real" / "labels.jsonl")) == "real"
+    assert run_eval._set_name(ns(set=None, labels=tmp_path / "Private" / "labels.jsonl")) is None
+    assert run_eval._set_name(ns(set=None, labels=data / "labels.jsonl")) is None
+    assert run_eval._set_name(ns(set="synthetic-v1", labels=tmp_path / "x.jsonl")) == "synthetic-v1"
+    with pytest.raises(SystemExit):
+        run_eval._set_name(ns(set="a | b", labels=tmp_path / "x.jsonl"))

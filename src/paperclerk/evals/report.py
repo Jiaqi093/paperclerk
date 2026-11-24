@@ -173,6 +173,7 @@ def previous_run(history: list[dict], fingerprint: str) -> dict | None:
 
 _COLUMNS = [
     ("date", "Date"),
+    ("set", "Set"),
     ("labels", "Labels"),
     ("n", "Docs"),
     ("model", "Model"),
@@ -180,6 +181,7 @@ _COLUMNS = [
     ("red_line_ok", "Red line"),
     ("fabrications", "Fabrications"),
     ("fully_correct", "Fully correct"),
+    ("reviewed", "Sent to review"),
     ("cost_per_doc_usd", "Cost/doc ($)"),
     ("latency_p50_ms", "p50 (ms)"),
 ]
@@ -189,13 +191,21 @@ def _cell(row: dict, key: str) -> str:
     v = row.get(key)
     if key == "red_line_ok":
         return "pass" if v else "**FAIL**"
-    if key == "fully_correct" and row.get("n"):
+    if key in ("fully_correct", "reviewed") and v is not None and row.get("n"):
         return f"{v}/{row['n']}"
     return "—" if v is None else str(v)
 
 
-def save_run(report: Report, jsonl: Path, markdown: Path, today: date | None = None) -> dict:
-    row = {"date": (today or date.today()).isoformat(), **report.summary()}
+def save_run(
+    report: Report,
+    jsonl: Path,
+    markdown: Path,
+    today: date | None = None,
+    data_set: str | None = None,
+) -> dict:
+    """Append this run's totals to the history and rewrite the table. `data_set` names the
+    label set ("real", "sroie"): a folder name, never a document's."""
+    row = {"date": (today or date.today()).isoformat(), "set": data_set, **report.summary()}
     with jsonl.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
     history = load_history(jsonl)

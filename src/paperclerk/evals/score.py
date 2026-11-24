@@ -214,6 +214,7 @@ class Report:
             "slipped": len(self.slipped),
             "fabrications": self.fabrications,
             "fully_correct": self.fully_correct,
+            "reviewed": self.review()["reviewed"],
             "failed": self.failed,
             "cost_per_doc_usd": round(cost, 6) if cost is not None else None,
             "latency_p50_ms": p50,

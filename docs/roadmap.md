@@ -65,8 +65,9 @@ document has text or `needs_vision`; encrypted and corrupt files have tests.
 
 ## F6 — Evals (starts with F2)
 
-Scoring and labeling tool done (`evals/run_eval.py`, `evals/label.py`); no real numbers yet:
-they need labels and F2 predictions.
+Scoring and labeling tool done (`evals/run_eval.py`, `evals/label.py`). First real numbers on
+2026-11-25 (F2 core): 19/19 real documents fully correct, 48/60 SROIE scans, red line held on
+both; totals in `evals/results.md` (with the label set's name) and the README.
 
 - [x] Labeling guide ([evals/labeling-guide.md](../evals/labeling-guide.md)): one correct answer
       per document, type tie-break order, what "amount" means per type, key fields per type, at

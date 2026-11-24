@@ -45,18 +45,30 @@ Design decisions and trade-offs live in [docs/architecture.md](docs/architecture
 
 ## Eval results
 
-_First numbers once F2 produces extractions._ The scorer and labels are ready:
+First run, November 2026 (F2 core; text read by Claude Sonnet 5.5, scans by Claude Opus 5.5):
+
+| Set | Docs | Red line | Fabrications | Fully correct | Sent to review | Cost / doc | p50 |
+|---|---|---|---|---|---|---|---|
+| Real bills and receipts (private) | 19 | pass | 0 | **19/19** | 2/19 | $0.010 | 2.6 s |
+| SROIE receipt scans (public) | 60 | pass | 11 | **48/60** | 60/60 | $0.014 | 3.7 s |
 
 - **Red line:** a made-up company, amount or date that reaches the library without a person
-  seeing it must be **0**. One case blocks the change. A source check (is the value actually
-  written in the document?) and a confidence threshold send doubtful documents to review.
+  seeing it must be **0**. One case blocks the change. Every company, amount and date must be
+  written in the document and quoted from it, and confidence must clear a threshold; anything
+  else goes to review.
 - **Fully correct:** right document type plus that type's key fields (bill: company, amount,
   due date; receipt: company, amount, payment date).
-- **Data:** real documents labelled by hand (private, never committed) and public sets scored
-  separately, starting with SROIE receipts.
+- **Real set:** 9 of the 19 are hard cases (two totals on one bill, a paid "tax invoice", a
+  levy minus a part payment); all right. The 2 reviews were correct answers below the
+  confidence threshold.
+- **SROIE:** scans can't be checked against text yet, so every one goes to review and none of
+  the 11 wrong values reached the library. Most "wrong" companies are a naming difference:
+  SROIE labels the registered company ("Gerbang Alaf Restaurants Sdn Bhd"), our rules the brand
+  people know ("McDonald's"); about 4 are real misreads. On-device text recognition, so scans
+  can be checked too, is next on the roadmap.
 
-Rules for labels: [evals/labeling-guide.md](evals/labeling-guide.md). Methodology and file
-formats: [evals/README.md](evals/README.md).
+All runs: [evals/results.md](evals/results.md). Label rules:
+[evals/labeling-guide.md](evals/labeling-guide.md). Methodology: [evals/README.md](evals/README.md).
 
 ## Quick start
 
